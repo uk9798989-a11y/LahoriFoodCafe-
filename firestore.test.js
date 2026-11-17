@@ -347,4 +347,88 @@ test("Feedback: Owner can submit food & service ratings and query own feedback; 
   await assertSucceeds(superDb.collection("feedback").doc("fb_1").delete());
 });
 
+test("BranchAdmin staff mapping: only SuperAdmin manages staff; BranchManager sees only assigned branch orders", async () => {
+  const custADb = testEnv.authenticatedContext(CUSTOMER_A, { email: "custA@gmail.com", email_verified: true }).firestore();
+  const branch1Db = testEnv.authenticatedContext(BRANCH_MGR_UID, { email: BRANCH_1_EMAIL, email_verified: true }).firestore();
+  const branch2Db = testEnv.authenticatedContext("branch2_mgr_uid", { email: "branch2.manager@gmail.com", email_verified: true }).firestore();
+  const superDb = testEnv.authenticatedContext(SUPER_ADMIN_UID, { email: SUPER_ADMIN_EMAIL, email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+
+  const staffPayload = {
+    email: BRANCH_1_EMAIL,
+    role: "BranchAdmin",
+    branchId: "branch_1",
+    branchName: "Lahori Food Cafe — Gulberg III",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Customer and BranchAdmin cannot assign themselves or others in branch_admins
+  await assertFails(custADb.collection("branch_admins").doc("mgr_1").set(staffPayload));
+  await assertFails(branch1Db.collection("branch_admins").doc("mgr_1").set(staffPayload));
+
+  // Invalid role or invalid branchId rejected even for SuperAdmin
+  await assertFails(superDb.collection("branch_admins").doc("mgr_bad_role").set({ ...staffPayload, role: "SuperAdmin" }));
+  await assertFails(superDb.collection("branch_admins").doc("mgr_bad_branch").set({ ...staffPayload, branchId: "branch_9" }));
+
+  // SuperAdmin creates valid BranchAdmin assignment
+  await assertSucceeds(superDb.collection("branch_admins").doc("mgr_1").set(staffPayload));
+
+  // Assigned BranchAdmin can query own email mapping; other users cannot read it
+  await assertSucceeds(branch1Db.collection("branch_admins").where("email", "==", BRANCH_1_EMAIL).get());
+  await assertFails(custADb.collection("branch_admins").where("email", "==", BRANCH_1_EMAIL).get());
+
+  // Seed orders across branch_1 and branch_2
+  const branch1Order = {
+    userId: CUSTOMER_A,
+    guestSessionId: "",
+    guestCheckout: false,
+    customerName: "Order One",
+    customerEmail: "custA@gmail.com",
+    customerPhone: "03001234567",
+    orderType: "PICKUP",
+    deliveryAddress: "Self Pickup",
+    branchId: "branch_1",
+    branchName: "Lahori Food Cafe — Gulberg III",
+    branchAdminEmails: [],
+    items: [{ itemId: "zinger_1", name: "Zinger Burger", quantity: 1, unitPricePkr: 350, lineTotalPkr: 350 }],
+    itemsSummary: "1x Zinger Burger",
+    promoCode: "",
+    discountPkr: 0,
+    subtotalPkr: 350,
+    deliveryFeePkr: 0,
+    totalPkr: 350,
+    status: "Confirmed",
+    createdAt: now,
+    updatedAt: now,
+  };
+  const branch2Order = {
+    ...branch1Order,
+    branchId: "branch_2",
+    branchName: "Lahori Food Cafe — DHA Phase 5",
+    branchAdminEmails: ["branch2.manager@gmail.com"],
+  };
+
+  await assertSucceeds(custADb.collection("orders").doc("ord_b1").set(branch1Order));
+  await assertSucceeds(custADb.collection("orders").doc("ord_b2").set(branch2Order));
+
+  // SuperAdmin syncs branchAdminEmails on pre-existing branch_1 order
+  await assertSucceeds(
+    superDb.collection("orders").doc("ord_b1").update({
+      branchAdminEmails: [BRANCH_1_EMAIL],
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+
+  // Branch 1 manager queries branch_1 orders & updates status, but CANNOT access branch_2 or mutate menu/staff
+  await assertSucceeds(
+    branch1Db.collection("orders").where("branchAdminEmails", "array-contains", BRANCH_1_EMAIL).where("branchId", "==", "branch_1").get()
+  );
+  await assertSucceeds(branch1Db.collection("orders").doc("ord_b1").update({ status: "Preparing", updatedAt: new Date(Date.now() - 500) }));
+  await assertFails(branch1Db.collection("orders").doc("ord_b2").get());
+  await assertFails(branch2Db.collection("orders").doc("ord_b1").get());
+  await assertFails(branch1Db.collection("menu_items").doc("hack").delete());
+});
+
+
 

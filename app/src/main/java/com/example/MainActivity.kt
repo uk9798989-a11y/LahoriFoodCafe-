@@ -23,12 +23,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -95,6 +97,7 @@ import com.example.ui.screens.SuperAdminDashboardScreen
 import com.example.ui.theme.LahoriBlack
 import com.example.ui.theme.LahoriCafeTheme
 import com.example.ui.theme.LahoriGold
+import com.example.ui.theme.LahoriRed
 import com.example.ui.theme.LahoriWhite
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
@@ -540,6 +543,8 @@ private fun AuthenticatedCafeShell(
     val pendingSurveyOrder by viewModel.pendingSurveyOrder.collectAsStateWithLifecycle()
     val isSubmittingReview by viewModel.isSubmittingReview.collectAsStateWithLifecycle()
     val isSubmittingFeedback by viewModel.isSubmittingFeedback.collectAsStateWithLifecycle()
+    val isSavingStaff by viewModel.isSavingStaff.collectAsStateWithLifecycle()
+    val branchAssignmentLoaded by viewModel.branchAssignmentLoaded.collectAsStateWithLifecycle()
     val trackedOrderState by viewModel.trackedOrderState.collectAsStateWithLifecycle()
     val fcmTokenRegistered by viewModel.fcmTokenRegistered.collectAsStateWithLifecycle()
     val actionError by viewModel.actionError.collectAsStateWithLifecycle()
@@ -630,6 +635,10 @@ private fun AuthenticatedCafeShell(
     }
     val activeOrderCount = activeOrdersList.size
 
+    val isSuperAdminUser =
+        (userEmail.equals(SUPER_ADMIN_EMAIL, ignoreCase = true) && isEmailVerified) ||
+            effectiveRole == UserRole.SuperAdmin
+
     if (showSuperAdminDashboard && userEmail.equals(SUPER_ADMIN_EMAIL, ignoreCase = true)) {
         SuperAdminDashboardScreen(
             allOrdersState = superAdminOrdersState,
@@ -637,13 +646,21 @@ private fun AuthenticatedCafeShell(
             branchAdmins = allBranchAdmins,
             promotions = promotionsList,
             reviews = allReviews,
+            isSavingStaff = isSavingStaff,
             onUpdateOrderStatus = { orderId, status -> viewModel.updateOrderStatus(orderId, status) },
             onSaveMenuItem = { id, name, desc, cat, price, imgKey, badge, avail, sort, done ->
                 viewModel.saveMenuItem(id, name, desc, cat, price, imgKey, badge, avail, sort, done)
             },
             onDeleteMenuItem = { viewModel.deleteMenuItem(it) },
             onSeedMenu = { viewModel.seedMenuNow() },
-            onAddBranchAdmin = { email, branchId, done -> viewModel.addBranchManager(email, branchId, done) },
+            onAddBranchAdmin = { email, role, branchId, done ->
+                viewModel.addBranchManager(
+                    email = email,
+                    role = role,
+                    branchId = branchId,
+                    onDone = done
+                )
+            },
             onRemoveBranchAdmin = { viewModel.removeBranchManager(it) },
             onSavePromotion = { code, discountType, discountValue, minOrderPkr, active, done ->
                 viewModel.savePromotion(code, discountType, discountValue, minOrderPkr, active, done)
@@ -654,13 +671,64 @@ private fun AuthenticatedCafeShell(
         return
     }
 
-    if (showBranchAdminDashboard && branchAdminAssignment != null) {
+    if (!isSuperAdminUser && !branchAssignmentLoaded) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                CircularProgressIndicator(color = LahoriRed)
+                Text(
+                    text = "Verifying staff & branch access...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
+    val assignedBranchEntry = branchAdminAssignment
+    if (!isSuperAdminUser && assignedBranchEntry != null) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            BranchAdminDashboardScreen(
+                branchId = assignedBranchEntry.branchId,
+                branchName = assignedBranchEntry.branchName,
+                ordersState = branchOrdersState,
+                onUpdateOrderStatus = { orderId, status -> viewModel.updateOrderStatus(orderId, status) },
+                managerEmail = userEmail,
+                onSignOut = {
+                    scope.launch {
+                        withContext(NonCancellable) {
+                            viewModel.unregisterDeviceFcmToken()
+                        }
+                        onSignOut()
+                    }
+                }
+            )
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+            )
+        }
+        return
+    }
+
+    if (showBranchAdminDashboard && assignedBranchEntry != null) {
         BranchAdminDashboardScreen(
-            branchId = branchAdminAssignment!!.branchId,
-            branchName = branchAdminAssignment!!.branchName,
+            branchId = assignedBranchEntry.branchId,
+            branchName = assignedBranchEntry.branchName,
             ordersState = branchOrdersState,
             onUpdateOrderStatus = { orderId, status -> viewModel.updateOrderStatus(orderId, status) },
-            onBack = { showBranchAdminDashboard = false }
+            onBack = { showBranchAdminDashboard = false },
+            managerEmail = userEmail
         )
         return
     }

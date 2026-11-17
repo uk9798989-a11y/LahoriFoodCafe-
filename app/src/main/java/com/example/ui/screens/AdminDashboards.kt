@@ -27,14 +27,19 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -67,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,8 +84,10 @@ import com.example.model.OrderReview
 import com.example.model.OrderStatus
 import com.example.model.OrderType
 import com.example.model.Promotion
+import com.example.model.SUPER_ADMIN_EMAIL
 import com.example.model.SeedMenuData
 import com.example.model.UiState
+import com.example.model.UserRole
 import com.example.ui.components.formatPkr
 import com.example.ui.theme.LahoriBlack
 import com.example.ui.theme.LahoriGold
@@ -109,7 +117,7 @@ fun SuperAdminDashboardScreen(
     ) -> Unit,
     onDeleteMenuItem: (String) -> Unit,
     onSeedMenu: () -> Unit,
-    onAddBranchAdmin: (email: String, branchId: String, onDone: () -> Unit) -> Unit,
+    onAddBranchAdmin: (email: String, role: String, branchId: String, onDone: () -> Unit) -> Unit,
     onRemoveBranchAdmin: (String) -> Unit,
     onSavePromotion: (
         code: String,
@@ -121,7 +129,8 @@ fun SuperAdminDashboardScreen(
     ) -> Unit,
     onDeletePromotion: (String) -> Unit,
     onBack: () -> Unit,
-    reviews: List<OrderReview> = emptyList()
+    reviews: List<OrderReview> = emptyList(),
+    isSavingStaff: Boolean = false
 ) {
     BackHandler(onBack = onBack)
 
@@ -129,7 +138,6 @@ fun SuperAdminDashboardScreen(
     var branchFilter by remember { mutableStateOf("ALL") }
     var editingMenuItem by remember { mutableStateOf<MenuItem?>(null) }
     var showAddMenuDialog by remember { mutableStateOf(false) }
-    var showAddManagerDialog by remember { mutableStateOf(false) }
     var editingPromotion by remember { mutableStateOf<Promotion?>(null) }
     var showPromoDialog by remember { mutableStateOf(false) }
 
@@ -350,60 +358,12 @@ fun SuperAdminDashboardScreen(
                 }
 
                 2 -> {
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        item(key = "add_manager_btn") {
-                            Button(
-                                onClick = { showAddManagerDialog = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = LahoriRed),
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                            ) {
-                                Icon(Icons.Filled.Add, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("ASSIGN BRANCH MANAGER", style = MaterialTheme.typography.labelLarge)
-                            }
-                        }
-
-                        if (branchAdmins.isEmpty()) {
-                            item(key = "no_branch_admins") {
-                                Text(
-                                    text = "No Branch Managers assigned yet. Assign a Gmail address to branch_1 or branch_2 so managers can log in and see only their branch orders.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        } else {
-                            items(branchAdmins, key = { it.id }) { admin ->
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = MaterialTheme.colorScheme.surface,
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(14.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(admin.email, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-                                            Text("${admin.branchId} • ${admin.branchName}", style = MaterialTheme.typography.bodySmall, color = LahoriRed)
-                                        }
-                                        IconButton(onClick = { onRemoveBranchAdmin(admin.id) }) {
-                                            Icon(Icons.Filled.DeleteOutline, contentDescription = "Remove manager", tint = LahoriRed)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    StaffManagementTab(
+                        branchAdmins = branchAdmins,
+                        isSavingStaff = isSavingStaff,
+                        onAddBranchAdmin = onAddBranchAdmin,
+                        onRemoveBranchAdmin = onRemoveBranchAdmin
+                    )
                 }
 
                 3 -> {
@@ -592,17 +552,6 @@ fun SuperAdminDashboardScreen(
         )
     }
 
-    if (showAddManagerDialog) {
-        AddBranchManagerDialog(
-            onDismiss = { showAddManagerDialog = false },
-            onSave = { email, branchId ->
-                onAddBranchAdmin(email, branchId) {
-                    showAddManagerDialog = false
-                }
-            }
-        )
-    }
-
     if (showPromoDialog) {
         PromoEditorDialog(
             initialPromo = editingPromotion,
@@ -620,34 +569,444 @@ fun SuperAdminDashboardScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StaffManagementTab(
+    branchAdmins: List<BranchAdminEntry>,
+    isSavingStaff: Boolean,
+    onAddBranchAdmin: (email: String, role: String, branchId: String, onDone: () -> Unit) -> Unit,
+    onRemoveBranchAdmin: (String) -> Unit
+) {
+    var staffEmail by remember { mutableStateOf("") }
+    var selectedRole by remember { mutableStateOf(UserRole.BranchAdmin.name) }
+    var selectedBranchId by remember { mutableStateOf(BranchDirectory.branch1.id) }
+    var validationError by remember { mutableStateOf<String?>(null) }
+    var savedBanner by remember { mutableStateOf<String?>(null) }
+
+    val branchOptions = remember {
+        listOf(
+            BranchDirectory.branch1.id to "Branch 1 (Gulberg)",
+            BranchDirectory.branch2.id to "Branch 2 (DHA)"
+        )
+    }
+    val emailPattern = remember { Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$") }
+
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item(key = "add_staff_form_card") {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                shadowElevation = 2.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = LahoriRed.copy(alpha = 0.12f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PersonAdd,
+                                contentDescription = null,
+                                tint = LahoriRed,
+                                modifier = Modifier
+                                    .padding(8.dp)
+                                    .size(20.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "ADD STAFF MEMBER",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Assign BranchAdmin access so managers land directly on their branch orders when signing in.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = staffEmail,
+                        onValueChange = {
+                            staffEmail = it
+                            validationError = null
+                            savedBanner = null
+                        },
+                        label = { Text("Staff Email Address") },
+                        placeholder = { Text("manager@gmail.com") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Email,
+                            imeAction = ImeAction.Done
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("staff_email_input")
+                    )
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "ASSIGN ROLE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = selectedRole == UserRole.BranchAdmin.name,
+                                onClick = { selectedRole = UserRole.BranchAdmin.name },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Filled.AdminPanelSettings,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                },
+                                label = { Text("BranchAdmin", fontWeight = FontWeight.SemiBold) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = LahoriBlack,
+                                    selectedLabelColor = LahoriGold,
+                                    selectedLeadingIconColor = LahoriGold
+                                ),
+                                modifier = Modifier.testTag("staff_role_chip_branch_admin")
+                            )
+                        }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "ASSIGN BRANCH",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            branchOptions.forEach { (id, label) ->
+                                val isSelected = selectedBranchId == id
+                                val chipTag = if (id == BranchDirectory.branch1.id) {
+                                    "staff_branch_1_chip"
+                                } else {
+                                    "staff_branch_2_chip"
+                                }
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        selectedBranchId = id
+                                        savedBanner = null
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Filled.Storefront,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    label = { Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = LahoriRed,
+                                        selectedLabelColor = LahoriWhite,
+                                        selectedLeadingIconColor = LahoriWhite
+                                    ),
+                                    modifier = Modifier.testTag(chipTag)
+                                )
+                            }
+                        }
+                    }
+
+                    if (validationError != null) {
+                        Text(
+                            text = validationError!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = LahoriRed
+                        )
+                    }
+
+                    if (savedBanner != null) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = LahoriSuccess.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, LahoriSuccess.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckCircle,
+                                    contentDescription = null,
+                                    tint = LahoriSuccess,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = savedBanner!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            val cleanEmail = staffEmail.trim().lowercase()
+                            when {
+                                !emailPattern.matches(cleanEmail) -> {
+                                    validationError = "Please enter a valid staff email address."
+                                }
+                                cleanEmail.equals(SUPER_ADMIN_EMAIL, ignoreCase = true) -> {
+                                    validationError = "This email is already reserved for Super Admin."
+                                }
+                                else -> {
+                                    validationError = null
+                                    val targetBranchLabel = BranchDirectory.shortPickerLabel(selectedBranchId)
+                                    onAddBranchAdmin(cleanEmail, selectedRole, selectedBranchId) {
+                                        staffEmail = ""
+                                        savedBanner = "Saved $selectedRole access for $cleanEmail → $targetBranchLabel"
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isSavingStaff,
+                        colors = ButtonDefaults.buttonColors(containerColor = LahoriRed),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("save_staff_btn")
+                    ) {
+                        if (isSavingStaff) {
+                            CircularProgressIndicator(
+                                color = LahoriWhite,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("SAVING TO FIRESTORE...", style = MaterialTheme.typography.labelLarge)
+                        } else {
+                            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("SAVE STAFF ACCESS", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
+            }
+        }
+
+        item(key = "assigned_staff_header") {
+            Text(
+                text = "ASSIGNED STAFF MEMBERS (${branchAdmins.size})",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+
+        if (branchAdmins.isEmpty()) {
+            item(key = "no_branch_admins") {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "No Branch Managers assigned yet. Add a manager's Gmail above and link them to Branch 1 (Gulberg) or Branch 2 (DHA).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(14.dp)
+                    )
+                }
+            }
+        } else {
+            items(branchAdmins, key = { it.id }) { admin ->
+                val branchLabel = BranchDirectory.shortPickerLabel(admin.branchId)
+                val roleLabel = admin.role.ifBlank { UserRole.BranchAdmin.name }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = admin.email,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = LahoriBlack,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = roleLabel,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LahoriGold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "$branchLabel • ${admin.branchId}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = LahoriRed,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = { onRemoveBranchAdmin(admin.id) },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("remove_staff_${admin.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.DeleteOutline,
+                                contentDescription = "Remove staff member ${admin.email}",
+                                tint = LahoriRed
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BranchAdminDashboardScreen(
     branchId: String,
     branchName: String,
     ordersState: UiState<List<CafeOrder>>,
     onUpdateOrderStatus: (orderId: String, newStatus: OrderStatus) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit = {},
+    managerEmail: String = "",
+    onSignOut: (() -> Unit)? = null
 ) {
-    BackHandler(onBack = onBack)
+    val isRestrictedRootMode = onSignOut != null
+    if (!isRestrictedRootMode) {
+        BackHandler(onBack = onBack)
+    }
+
+    var orderFilter by remember { mutableStateOf("ALL") }
+    val branchLabel = remember(branchId) { BranchDirectory.shortPickerLabel(branchId) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            Surface(color = LahoriRed, contentColor = LahoriWhite) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(horizontal = 8.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = LahoriWhite)
+            Surface(color = LahoriBlack, contentColor = LahoriWhite) {
+                Column(modifier = Modifier.statusBarsPadding()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (!isRestrictedRootMode) {
+                            IconButton(
+                                onClick = onBack,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("branch_admin_back_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = LahoriWhite
+                                )
+                            }
+                        } else {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = LahoriRed
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Storefront,
+                                    contentDescription = null,
+                                    tint = LahoriWhite,
+                                    modifier = Modifier
+                                        .padding(10.dp)
+                                        .size(22.dp)
+                                )
+                            }
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "BRANCH ADMIN DASHBOARD",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = LahoriGold
+                            )
+                            Text(
+                                text = "$branchLabel • $branchName",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = LahoriWhite
+                            )
+                            if (managerEmail.isNotBlank()) {
+                                Text(
+                                    text = "$managerEmail • Live Orders Only",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LahoriWhite.copy(alpha = 0.72f)
+                                )
+                            }
+                        }
+
+                        if (onSignOut != null) {
+                            TextButton(
+                                onClick = onSignOut,
+                                colors = ButtonDefaults.textButtonColors(contentColor = LahoriWhite),
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("branch_admin_sign_out_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Logout,
+                                    contentDescription = "Sign out",
+                                    tint = LahoriGold,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "SIGN OUT",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = LahoriWhite
+                                )
+                            }
+                        }
                     }
-                    Column {
-                        Text("BRANCH MANAGER (${branchId.uppercase()})", style = MaterialTheme.typography.titleLarge, color = LahoriWhite)
-                        Text(branchName, style = MaterialTheme.typography.bodySmall, color = LahoriWhite.copy(alpha = 0.85f))
-                    }
+                    HorizontalDivider(color = LahoriRed, thickness = 2.dp)
                 }
             }
         }
@@ -666,20 +1025,123 @@ fun BranchAdminDashboardScreen(
                     Text(ordersState.message, color = LahoriRed)
                 }
                 is UiState.Success -> {
-                    if (ordersState.data.isEmpty()) {
-                        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                            Text(
-                                text = "No incoming orders assigned to $branchId yet.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    val allBranchOrders = ordersState.data
+                    val activeCount = remember(allBranchOrders) {
+                        allBranchOrders.count { OrderStatus.fromString(it.status) != OrderStatus.Delivered }
+                    }
+                    val completedCount = remember(allBranchOrders) {
+                        allBranchOrders.count { OrderStatus.fromString(it.status) == OrderStatus.Delivered }
+                    }
+                    val visibleOrders = remember(allBranchOrders, orderFilter) {
+                        when (orderFilter) {
+                            "ACTIVE" -> allBranchOrders.filter { OrderStatus.fromString(it.status) != OrderStatus.Delivered }
+                            "COMPLETED" -> allBranchOrders.filter { OrderStatus.fromString(it.status) == OrderStatus.Delivered }
+                            else -> allBranchOrders
                         }
-                    } else {
-                        LazyColumn(
-                            contentPadding = PaddingValues(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(ordersState.data, key = { it.id }) { order ->
+                    }
+
+                    LazyColumn(
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item(key = "branch_orders_header") {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = LahoriRed.copy(alpha = 0.08f),
+                                    border = BorderStroke(1.dp, LahoriRed.copy(alpha = 0.25f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "REAL-TIME ${branchLabel.uppercase()} QUEUE",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = LahoriRed
+                                            )
+                                            Text(
+                                                text = "Restricted staff view: incoming orders for your branch only.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = LahoriRed
+                                        ) {
+                                            Text(
+                                                text = "$activeCount LIVE",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LahoriWhite,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(
+                                        "ALL" to "All (${allBranchOrders.size})",
+                                        "ACTIVE" to "Active ($activeCount)",
+                                        "COMPLETED" to "Completed ($completedCount)"
+                                    ).forEach { (key, label) ->
+                                        FilterChip(
+                                            selected = orderFilter == key,
+                                            onClick = { orderFilter = key },
+                                            label = { Text(label, fontSize = 12.sp) },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = LahoriRed,
+                                                selectedLabelColor = LahoriWhite
+                                            ),
+                                            modifier = Modifier.testTag("branch_orders_filter_${key.lowercase()}")
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (visibleOrders.isEmpty()) {
+                            item(key = "no_branch_orders_empty") {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(24.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.ReceiptLong,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                        Text(
+                                            text = "No incoming orders for $branchLabel",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "New customer orders routed to $branchName appear here automatically in real time.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            items(visibleOrders, key = { it.id }) { order ->
                                 AdminOrderControlCard(
                                     order = order,
                                     onChangeStatus = { status -> onUpdateOrderStatus(order.id, status) }
@@ -926,60 +1388,6 @@ private fun MenuEditorDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = LahoriRed)
             ) {
                 Text("SAVE")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("CANCEL", color = MaterialTheme.colorScheme.onSurface) }
-        }
-    )
-}
-
-@Composable
-private fun AddBranchManagerDialog(
-    onDismiss: () -> Unit,
-    onSave: (email: String, branchId: String) -> Unit
-) {
-    var email by remember { mutableStateOf("") }
-    var selectedBranchId by remember { mutableStateOf(BranchDirectory.branch1.id) }
-    var errorMsg by remember { mutableStateOf<String?>(null) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        title = { Text("Assign Branch Manager", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it; errorMsg = null },
-                    label = { Text("Manager Gmail Address") },
-                    placeholder = { Text("manager@gmail.com") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BranchDirectory.allBranches.forEach { branch ->
-                        FilterChip(
-                            selected = selectedBranchId == branch.id,
-                            onClick = { selectedBranchId = branch.id },
-                            label = { Text(branch.id.uppercase(), fontSize = 11.sp) }
-                        )
-                    }
-                }
-                if (errorMsg != null) {
-                    Text(errorMsg!!, color = LahoriRed, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    if (!email.contains("@")) errorMsg = "Enter a valid email"
-                    else onSave(email.trim().lowercase(), selectedBranchId)
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = LahoriRed)
-            ) {
-                Text("ASSIGN")
             }
         },
         dismissButton = {

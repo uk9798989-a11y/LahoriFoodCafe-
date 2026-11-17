@@ -70,12 +70,13 @@
       "type": "object",
       "properties": {
         "email": { "type": "string", "description": "Verified Google email of branch manager." },
+        "role": { "type": "string", "enum": ["BranchAdmin"], "description": "Assigned RBAC role for branch staff access." },
         "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Assigned branch ID." },
         "branchName": { "type": "string", "description": "Human-readable branch name." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
       },
-      "required": ["email", "branchId", "branchName", "createdAt", "updatedAt"]
+      "required": ["email", "role", "branchId", "branchName", "createdAt", "updatedAt"]
     },
     "CafeOrder": {
       "title": "CafeOrder",

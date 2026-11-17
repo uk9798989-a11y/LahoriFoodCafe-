@@ -467,28 +467,93 @@ class CafeRepository(
             }
     }
 
-    suspend fun addBranchAdmin(email: String, branchId: String): Result<Unit> {
-        val path = "branch_admins"
+    suspend fun addBranchAdmin(
+        email: String,
+        branchId: String,
+        role: String = UserRole.BranchAdmin.name
+    ): Result<Unit> {
+        var docPath = "branch_admins"
         return try {
             requireUserId()
             val cleanEmail = email.trim().lowercase()
-            require(cleanEmail.contains("@") && cleanEmail.length in 3..120) { "Enter a valid Gmail address" }
+            require(cleanEmail.contains("@") && cleanEmail.contains(".") && cleanEmail.length in 5..120) {
+                "Enter a valid staff email address"
+            }
+            val normalizedRole = if (role.equals(UserRole.BranchAdmin.name, ignoreCase = true)) {
+                UserRole.BranchAdmin.name
+            } else {
+                UserRole.BranchAdmin.name
+            }
             val branch = BranchDirectory.byId(branchId)
-            val docRef = db.collection(path).document()
-            docRef.set(
-                mapOf(
-                    "email" to cleanEmail,
-                    "branchId" to branch.id,
-                    "branchName" to branch.name,
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
+            val docId = "mgr_${sha256Hex(cleanEmail).take(24)}"
+            val docRef = db.collection("branch_admins").document(docId)
+            docPath = docRef.path
+
+            val existing = docRef.get().await()
+            if (existing.exists()) {
+                docRef.update(
+                    mapOf(
+                        "email" to cleanEmail,
+                        "role" to normalizedRole,
+                        "branchId" to branch.id,
+                        "branchName" to branch.name,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            } else {
+                docRef.set(
+                    mapOf(
+                        "email" to cleanEmail,
+                        "role" to normalizedRole,
+                        "branchId" to branch.id,
+                        "branchName" to branch.name,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+
+            // Also remove any legacy random-ID duplicate docs for the same email if present
+            try {
+                val duplicates = db.collection("branch_admins")
+                    .whereEqualTo("email", cleanEmail)
+                    .get()
+                    .await()
+                    .documents
+                    .filter { it.id != docId }
+                duplicates.forEach { it.reference.delete().await() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
+
+            // Sync role onto user's /users/{uid} document if they have already signed in before
+            try {
+                val matchedUsers = db.collection("users")
+                    .whereEqualTo("email", cleanEmail)
+                    .limit(1)
+                    .get()
+                    .await()
+                matchedUsers.documents.firstOrNull()?.reference?.update(
+                    mapOf(
+                        "role" to normalizedRole,
+                        "assignedBranchId" to branch.id,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )?.await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
+
+            // Sync existing branch orders so newly assigned manager immediately sees active branch orders
+            syncManagerEmailAcrossBranchOrders(cleanEmail, assignedBranchId = branch.id)
+
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.CREATE, path)
+            handleFirestoreError(e, OperationType.WRITE, docPath)
             Result.failure(e)
         }
     }
@@ -497,13 +562,89 @@ class CafeRepository(
         val path = "branch_admins/$adminId"
         return try {
             requireUserId()
-            db.collection("branch_admins").document(adminId).delete().await()
+            val docRef = db.collection("branch_admins").document(adminId)
+            val snap = docRef.get().await()
+            val removedEmail = snap.getString("email")?.trim()?.lowercase().orEmpty()
+            docRef.delete().await()
+
+            if (removedEmail.isNotBlank()) {
+                try {
+                    val matchedUsers = db.collection("users")
+                        .whereEqualTo("email", removedEmail)
+                        .limit(1)
+                        .get()
+                        .await()
+                    matchedUsers.documents.firstOrNull()?.reference?.update(
+                        mapOf(
+                            "role" to UserRole.Customer.name,
+                            "assignedBranchId" to "",
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )?.await()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                }
+
+                syncManagerEmailAcrossBranchOrders(removedEmail, assignedBranchId = null)
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, path)
             Result.failure(e)
+        }
+    }
+
+    private suspend fun syncManagerEmailAcrossBranchOrders(
+        managerEmail: String,
+        assignedBranchId: String?
+    ) {
+        try {
+            val ordersSnap = db.collection("orders").get().await()
+            if (ordersSnap.isEmpty) return
+            var batch = db.batch()
+            var ops = 0
+
+            suspend fun flush(force: Boolean = false) {
+                if ((ops >= 400) || (force && ops > 0)) {
+                    batch.commit().await()
+                    batch = db.batch()
+                    ops = 0
+                }
+            }
+
+            for (doc in ordersSnap.documents) {
+                val orderBranch = doc.getString("branchId").orEmpty()
+                val currentEmails = (doc.get("branchAdminEmails") as? List<*>)
+                    ?.mapNotNull { (it as? String)?.trim()?.lowercase() }
+                    ?.distinct()
+                    .orEmpty()
+                val shouldContain = assignedBranchId != null && orderBranch == assignedBranchId
+                val updatedEmails = if (shouldContain) {
+                    if (currentEmails.contains(managerEmail)) null
+                    else (currentEmails + managerEmail).distinct().take(10)
+                } else {
+                    if (!currentEmails.contains(managerEmail)) null
+                    else currentEmails.filterNot { it == managerEmail }.take(10)
+                }
+                if (updatedEmails != null) {
+                    batch.update(
+                        doc.reference,
+                        mapOf(
+                            "branchAdminEmails" to updatedEmails,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    ops++
+                    flush()
+                }
+            }
+            flush(force = true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
         }
     }
 

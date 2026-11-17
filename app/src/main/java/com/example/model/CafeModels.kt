@@ -126,6 +126,12 @@ object BranchDirectory {
     fun byId(branchId: String): BranchInfo =
         allBranches.firstOrNull { it.id == branchId } ?: branch1
 
+    fun shortPickerLabel(branchId: String): String = when (branchId) {
+        branch1.id -> "Branch 1 (Gulberg)"
+        branch2.id -> "Branch 2 (DHA)"
+        else -> byId(branchId).name
+    }
+
     fun routeAddressToBranch(areaOrAddress: String): BranchInfo {
         val normalized = areaOrAddress.lowercase()
         val branch2Match = branch2.areas.any { normalized.contains(it.lowercase()) }
@@ -189,6 +195,7 @@ data class SavedAddress(
 data class BranchAdminEntry(
     @DocumentId val id: String = "",
     val email: String = "",
+    val role: String = UserRole.BranchAdmin.name,
     val branchId: String = BranchDirectory.branch1.id,
     val branchName: String = BranchDirectory.branch1.name,
     @ServerTimestamp val createdAt: Timestamp? = null,

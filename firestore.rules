@@ -73,6 +73,7 @@ service cloud.firestore {
 
     function isValidBranchAdmin(data) {
       return data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+             data.role == 'BranchAdmin' &&
              data.branchId in ['branch_1', 'branch_2'] &&
              data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80;
     }
@@ -280,8 +281,8 @@ service cloud.firestore {
 
       allow create: if isSuperAdmin() &&
                        isValidId(adminId) &&
-                       incoming().keys().hasAll(['email', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['email', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasAll(['email', 'role', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['email', 'role', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
                        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
                        isValidBranchAdmin(incoming());
@@ -291,7 +292,7 @@ service cloud.firestore {
                        isValidBranchAdmin(incoming()) &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['email', 'branchId', 'branchName', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role', 'branchId', 'branchName', 'updatedAt']);
 
       allow delete: if isSuperAdmin() && isValidId(adminId);
     }
@@ -333,7 +334,13 @@ service cloud.firestore {
                          (request.auth.token.email_verified == true && request.auth.token.email in existing().branchAdminEmails)
                        ) &&
                        (existing().status != 'Delivered' || isSuperAdmin()) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+                       (
+                         (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+                          incoming().branchAdminEmails == existing().branchAdminEmails) ||
+                         (isSuperAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['branchAdminEmails', 'updatedAt']) &&
+                          incoming().status == existing().status)
+                       );
 
       allow delete: if isSuperAdmin() && isValidId(orderId);
     }

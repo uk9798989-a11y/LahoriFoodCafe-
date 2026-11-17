@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -192,6 +193,12 @@ class LahoriViewModel(
     private val _isSubmittingFeedback = MutableStateFlow(false)
     val isSubmittingFeedback: StateFlow<Boolean> = _isSubmittingFeedback.asStateFlow()
 
+    private val _isSavingStaff = MutableStateFlow(false)
+    val isSavingStaff: StateFlow<Boolean> = _isSavingStaff.asStateFlow()
+
+    private val _branchAssignmentLoaded = MutableStateFlow(isSuperAdminByEmail || currentUserEmail.isBlank())
+    val branchAssignmentLoaded: StateFlow<Boolean> = _branchAssignmentLoaded.asStateFlow()
+
     private val _trackedOrderId = MutableStateFlow<String?>(null)
     val trackedOrderId: StateFlow<String?> = _trackedOrderId.asStateFlow()
 
@@ -248,10 +255,12 @@ class LahoriViewModel(
             MutableStateFlow(null)
         } else {
             repository.observeMyBranchAdminAssignment(currentUserEmail)
+                .onEach { _branchAssignmentLoaded.value = true }
                 .catch { error ->
                     val firestoreError = unwrapFirestoreException(error)
                     if (firestoreError == null && error is CancellationException) throw error
                     Log.w(TAG, "Branch admin check error", firestoreError ?: error)
+                    _branchAssignmentLoaded.value = true
                     emit(null)
                 }
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
@@ -725,9 +734,17 @@ class LahoriViewModel(
         }
     }
 
-    fun addBranchManager(email: String, branchId: String, onDone: () -> Unit) {
+    fun addBranchManager(
+        email: String,
+        role: String = UserRole.BranchAdmin.name,
+        branchId: String,
+        onDone: () -> Unit
+    ) {
+        if (_isSavingStaff.value) return
+        _isSavingStaff.value = true
         viewModelScope.launch {
-            val res = repository.addBranchAdmin(email, branchId)
+            val res = repository.addBranchAdmin(email = email, branchId = branchId, role = role)
+            _isSavingStaff.value = false
             res.onSuccess { onDone() }.onFailure { err ->
                 _actionError.value = err.localizedMessage ?: "Failed to assign branch manager"
             }
