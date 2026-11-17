@@ -58,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.BranchDirectory
+import com.example.model.CafeBranch
 import com.example.model.MenuItem
 import com.example.model.OrderType
 import com.example.ui.SharedSessionState
@@ -77,7 +78,8 @@ fun BucketCheckoutSheet(
     onApplyPromoCode: (code: String, onResult: (success: Boolean, message: String) -> Unit) -> Unit,
     onClearPromoCode: () -> Unit,
     onPlaceOrder: (name: String, phone: String, guestCheckout: Boolean) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    branches: List<CafeBranch> = BranchDirectory.defaultBranches
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var customerName by remember(defaultCustomerName) {
@@ -93,7 +95,7 @@ fun BucketCheckoutSheet(
 
     val deliveryFee = if (sessionState.orderType == OrderType.DELIVERY && sessionState.cartItems.isNotEmpty()) 150L else 0L
     val grandTotal = (sessionState.subtotalPkr + deliveryFee - sessionState.appliedDiscountPkr).coerceAtLeast(0L)
-    val branch = BranchDirectory.byId(sessionState.selectedBranchId)
+    val branch = BranchDirectory.byId(sessionState.selectedBranchId, branches)
     val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val successText = if (isDark) Color(0xFF4ADE80) else LahoriSuccess
 

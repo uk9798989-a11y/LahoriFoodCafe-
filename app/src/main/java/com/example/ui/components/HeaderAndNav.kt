@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.model.BranchDirectory
+import com.example.model.CafeBranch
 import com.example.model.OrderType
 import com.example.ui.theme.LahoriRed
 import com.example.ui.theme.LahoriWhite
@@ -94,9 +95,10 @@ fun LahoriTopHeader(
     onToggleSearch: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onDeliveryClick: () -> Unit,
-    onPickupClick: () -> Unit
+    onPickupClick: () -> Unit,
+    branches: List<CafeBranch> = BranchDirectory.defaultBranches
 ) {
-    val activeBranch = BranchDirectory.byId(selectedBranchId)
+    val activeBranch = BranchDirectory.byId(selectedBranchId, branches)
 
     Surface(
         color = MaterialTheme.colorScheme.surface,

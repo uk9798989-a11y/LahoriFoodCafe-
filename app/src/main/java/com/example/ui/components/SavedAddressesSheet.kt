@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.BranchDirectory
+import com.example.model.CafeBranch
 import com.example.model.SavedAddress
 import com.example.ui.theme.LahoriDarkCard
 import com.example.ui.theme.LahoriDarkSheet
@@ -70,7 +71,8 @@ fun SavedAddressesBottomSheet(
     onSelectAddress: (SavedAddress) -> Unit,
     onAddNewAddress: (label: String, street: String, area: String) -> Unit,
     onStartOrder: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    branches: List<CafeBranch> = BranchDirectory.defaultBranches
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showAddForm by remember { mutableStateOf(savedAddresses.isEmpty()) }
@@ -79,16 +81,25 @@ fun SavedAddressesBottomSheet(
     var areaInput by remember { mutableStateOf("Gulberg III") }
     var validationError by remember { mutableStateOf<String?>(null) }
 
-    val quickAreas = listOf(
-        "Gulberg III",
-        "Model Town",
-        "Garden Town",
-        "DHA Phase 5",
-        "Johar Town",
-        "Bahria Town"
-    )
-    val previewBranch = remember(areaInput, streetInput) {
-        BranchDirectory.routeAddressToBranch("$areaInput $streetInput")
+    val quickAreas = remember(branches) {
+        val dynamicAreas = branches
+            .filter { it.active }
+            .flatMap { it.areas.take(3) }
+            .distinct()
+            .take(12)
+        dynamicAreas.ifEmpty {
+            listOf(
+                "Gulberg III",
+                "Model Town",
+                "Garden Town",
+                "DHA Phase 5",
+                "Johar Town",
+                "Bahria Town"
+            )
+        }
+    }
+    val previewBranch = remember(areaInput, streetInput, branches) {
+        BranchDirectory.routeAddressToBranch("$areaInput $streetInput", branches)
     }
 
     ModalBottomSheet(
@@ -404,6 +415,139 @@ fun SavedAddressesBottomSheet(
                         style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
                         maxLines = 1
                     )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PickupBranchBottomSheet(
+    branches: List<CafeBranch>,
+    selectedBranchId: String,
+    onSelectBranch: (CafeBranch) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val activeBranches = remember(branches) {
+        branches.filter { it.active }.ifEmpty { branches.ifEmpty { BranchDirectory.defaultBranches } }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = LahoriDarkSheet,
+        contentColor = LahoriWhite,
+        dragHandle = null
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "SELECT PICKUP BRANCH",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = LahoriWhite
+                    )
+                    Text(
+                        text = "${activeBranches.size} Lahori Food Cafe branches available",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LahoriWhite.copy(alpha = 0.68f)
+                    )
+                }
+
+                Surface(
+                    shape = CircleShape,
+                    color = LahoriRed,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("close_pickup_branch_x")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Close Pickup Branch Picker",
+                            tint = LahoriWhite
+                        )
+                    }
+                }
+            }
+
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp)
+            ) {
+                items(activeBranches, key = { it.id }) { branch ->
+                    val isSelected = branch.id == selectedBranchId
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = LahoriDarkCard,
+                        border = BorderStroke(
+                            width = if (isSelected) 2.dp else 1.dp,
+                            color = if (isSelected) LahoriRed else Color.White.copy(alpha = 0.14f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelectBranch(branch) }
+                            .testTag("pickup_branch_card_${branch.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Storefront,
+                                    contentDescription = null,
+                                    tint = if (isSelected) LahoriRed else LahoriGold
+                                )
+                                Column {
+                                    Text(
+                                        text = branch.displayShortLabel(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = LahoriGold
+                                    )
+                                    Text(
+                                        text = branch.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = LahoriWhite
+                                    )
+                                    Text(
+                                        text = branch.shortAddress,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = LahoriWhite.copy(alpha = 0.72f)
+                                    )
+                                }
+                            }
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckCircle,
+                                    contentDescription = "Selected Branch",
+                                    tint = LahoriRed
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

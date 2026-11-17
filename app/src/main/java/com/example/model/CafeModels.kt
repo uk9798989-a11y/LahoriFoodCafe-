@@ -99,51 +99,99 @@ enum class OrderStatus(
     }
 }
 
-data class BranchInfo(
-    val id: String,
-    val name: String,
-    val shortAddress: String,
-    val areas: List<String>
-)
+@Keep
+@IgnoreExtraProperties
+data class CafeBranch(
+    @DocumentId val id: String = "",
+    val name: String = "",
+    val shortLabel: String = "",
+    val shortAddress: String = "",
+    val areas: List<String> = emptyList(),
+    val active: Boolean = true,
+    val sortOrder: Long = 0L,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun displayShortLabel(): String =
+        shortLabel.ifBlank { name.substringAfter("— ").trim().ifBlank { id } }
+}
+
+typealias BranchInfo = CafeBranch
 
 object BranchDirectory {
-    val branch1 = BranchInfo(
+    val branch1 = CafeBranch(
         id = "branch_1",
         name = "Lahori Food Cafe — Gulberg III",
+        shortLabel = "Branch 1 (Gulberg)",
         shortAddress = "MM Alam Road, Gulberg III, Lahore",
-        areas = listOf("Gulberg", "Model Town", "Garden Town", "Liberty", "Shadman", "Mall Road", "Muslim Town", "Ichhra")
+        areas = listOf("Gulberg", "Model Town", "Garden Town", "Liberty", "Shadman", "Mall Road", "Muslim Town", "Ichhra"),
+        active = true,
+        sortOrder = 1L
     )
 
-    val branch2 = BranchInfo(
+    val branch2 = CafeBranch(
         id = "branch_2",
         name = "Lahori Food Cafe — DHA Phase 5",
+        shortLabel = "Branch 2 (DHA)",
         shortAddress = "Commercial Sector Z, DHA Phase 5, Lahore",
-        areas = listOf("DHA", "Cantt", "Johar Town", "Bahria Town", "Wapda Town", "Cavalry Ground", "Askari", "Bedian")
+        areas = listOf("DHA", "Cantt", "Johar Town", "Bahria Town", "Wapda Town", "Cavalry Ground", "Askari", "Bedian"),
+        active = true,
+        sortOrder = 2L
     )
 
-    val allBranches = listOf(branch1, branch2)
+    val defaultBranches = listOf(branch1, branch2)
+    val allBranches = defaultBranches
 
-    fun byId(branchId: String): BranchInfo =
-        allBranches.firstOrNull { it.id == branchId } ?: branch1
+    fun byId(branchId: String, branches: List<CafeBranch> = defaultBranches): CafeBranch =
+        branches.firstOrNull { it.id == branchId }
+            ?: defaultBranches.firstOrNull { it.id == branchId }
+            ?: branches.firstOrNull()
+            ?: branch1
 
-    fun shortPickerLabel(branchId: String): String = when (branchId) {
-        branch1.id -> "Branch 1 (Gulberg)"
-        branch2.id -> "Branch 2 (DHA)"
-        else -> byId(branchId).name
+    fun shortPickerLabel(branchId: String, branches: List<CafeBranch> = defaultBranches): String {
+        val found = branches.firstOrNull { it.id == branchId }
+            ?: defaultBranches.firstOrNull { it.id == branchId }
+        return found?.displayShortLabel() ?: branchId
     }
 
-    fun routeAddressToBranch(areaOrAddress: String): BranchInfo {
-        val normalized = areaOrAddress.lowercase()
-        val branch2Match = branch2.areas.any { normalized.contains(it.lowercase()) }
-        if (branch2Match) return branch2
-        val branch1Match = branch1.areas.any { normalized.contains(it.lowercase()) }
-        if (branch1Match) return branch1
-        // Deterministic closest fallback based on hash/length when custom street entered
-        return if (normalized.contains("phase") || normalized.contains("south") || normalized.contains("town")) {
-            branch2
-        } else {
-            branch1
+    fun routeAddressToBranch(
+        areaOrAddress: String,
+        branches: List<CafeBranch> = defaultBranches
+    ): CafeBranch {
+        val pool = branches.filter { it.active }.ifEmpty {
+            branches.ifEmpty { defaultBranches }
+        }.sortedBy { it.sortOrder }
+
+        val normalized = areaOrAddress.lowercase().trim()
+        if (normalized.isNotBlank()) {
+            // Find the branch whose longest matching area keyword matches the query
+            var bestBranch: CafeBranch? = null
+            var bestScore = 0
+            for (branch in pool) {
+                for (area in branch.areas) {
+                    val cleanArea = area.trim().lowercase()
+                    if (cleanArea.isNotEmpty() && normalized.contains(cleanArea) && cleanArea.length > bestScore) {
+                        bestScore = cleanArea.length
+                        bestBranch = branch
+                    }
+                }
+            }
+            if (bestBranch != null) return bestBranch
+
+            // Secondary match against branch shortLabel, name, or shortAddress
+            val metaMatch = pool.firstOrNull { branch ->
+                branch.shortLabel.lowercase().let { it.isNotBlank() && normalized.contains(it) } ||
+                    branch.name.substringAfter("— ").lowercase().let { it.isNotBlank() && normalized.contains(it) }
+            }
+            if (metaMatch != null) return metaMatch
         }
+
+        // Deterministic fallback
+        val fallbackBranch2 = pool.firstOrNull { it.id == branch2.id }
+        if (fallbackBranch2 != null && (normalized.contains("phase") || normalized.contains("south") || normalized.contains("town"))) {
+            return fallbackBranch2
+        }
+        return pool.firstOrNull() ?: branch1
     }
 }
 

@@ -1,8 +1,24 @@
 {
   "entities": {
+    "CafeBranch": {
+      "title": "CafeBranch",
+      "description": "Dynamic restaurant branch managed by SuperAdmin for scalable multi-branch routing and order isolation.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Full branch display name." },
+        "shortLabel": { "type": "string", "description": "Compact label shown in pickers and dashboards (e.g. Branch 3 (Johar Town))." },
+        "shortAddress": { "type": "string", "description": "Physical street address of the branch." },
+        "areas": { "type": "array", "description": "Neighborhoods/zones served by this branch for delivery routing." },
+        "active": { "type": "boolean", "description": "Whether this branch is actively accepting orders." },
+        "sortOrder": { "type": "integer", "description": "Display ordering priority." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["name", "shortLabel", "shortAddress", "areas", "active", "sortOrder", "createdAt", "updatedAt"]
+    },
     "MenuItem": {
       "title": "MenuItem",
-      "description": "Fast-food menu item available at Lahori Food Cafe.",
+      "description": "Fast-food menu item available globally across Lahori Food Cafe branches.",
       "type": "object",
       "properties": {
         "name": { "type": "string", "description": "Display name of the food item." },
@@ -42,7 +58,7 @@
         "email": { "type": "string", "description": "Google account email." },
         "displayName": { "type": "string", "description": "Customer display name." },
         "role": { "type": "string", "enum": ["Customer", "BranchAdmin", "SuperAdmin"], "description": "RBAC role." },
-        "assignedBranchId": { "type": "string", "enum": ["", "branch_1", "branch_2"], "description": "Branch ID if BranchAdmin." },
+        "assignedBranchId": { "type": "string", "description": "Dynamic branch ID if BranchAdmin, or empty string." },
         "favoriteItemIds": { "type": "array", "description": "List of favorited menu item IDs." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
@@ -51,13 +67,13 @@
     },
     "SavedAddress": {
       "title": "SavedAddress",
-      "description": "Customer delivery address mapped automatically to closest branchId.",
+      "description": "Customer delivery address mapped automatically to a dynamic branchId.",
       "type": "object",
       "properties": {
         "label": { "type": "string", "description": "Short label like Home or Office." },
         "streetAddress": { "type": "string", "description": "Full street address." },
         "area": { "type": "string", "description": "Lahore neighborhood/zone used for branch routing." },
-        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Auto-assigned closest branch ID." },
+        "branchId": { "type": "string", "description": "Auto-assigned closest branch ID." },
         "branchName": { "type": "string", "description": "Auto-assigned closest branch name." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
@@ -66,12 +82,12 @@
     },
     "BranchAdminEntry": {
       "title": "BranchAdminEntry",
-      "description": "Authorized Branch Manager assignment managed by SuperAdmin.",
+      "description": "Authorized Branch Manager assignment managed by SuperAdmin, keyed by normalized email for instant permission revocation.",
       "type": "object",
       "properties": {
-        "email": { "type": "string", "description": "Verified Google email of branch manager." },
+        "email": { "type": "string", "description": "Lowercase Google email of branch manager." },
         "role": { "type": "string", "enum": ["BranchAdmin"], "description": "Assigned RBAC role for branch staff access." },
-        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Assigned branch ID." },
+        "branchId": { "type": "string", "description": "Assigned dynamic branch ID." },
         "branchName": { "type": "string", "description": "Human-readable branch name." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
@@ -80,7 +96,7 @@
     },
     "CafeOrder": {
       "title": "CafeOrder",
-      "description": "Customer or guest order routed to a branch with live status tracking.",
+      "description": "Customer or guest order routed to a dynamic branch with live status tracking and strict per-branch manager isolation.",
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "Firebase Auth UID of placer." },
@@ -91,9 +107,9 @@
         "customerPhone": { "type": "string", "description": "Contact phone number." },
         "orderType": { "type": "string", "enum": ["DELIVERY", "PICKUP"], "description": "Fulfillment mode." },
         "deliveryAddress": { "type": "string", "description": "Delivery address or Pickup counter note." },
-        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Assigned branch ID." },
+        "branchId": { "type": "string", "description": "Assigned dynamic branch ID." },
         "branchName": { "type": "string", "description": "Assigned branch name." },
-        "branchAdminEmails": { "type": "array", "description": "Denormalized manager emails authorized for this branch." },
+        "branchAdminEmails": { "type": "array", "description": "Optional denormalized manager emails for reference/alerts." },
         "items": { "type": "array", "description": "Line items ordered." },
         "itemsSummary": { "type": "string", "description": "Formatted item summary." },
         "promoCode": { "type": "string", "description": "Applied promo code if any." },
@@ -115,7 +131,7 @@
         "orderId": { "type": "string", "description": "Delivered order ID being reviewed." },
         "userId": { "type": "string", "description": "Firebase Auth UID of reviewer." },
         "customerName": { "type": "string", "description": "Reviewer display name." },
-        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Fulfilling branch ID." },
+        "branchId": { "type": "string", "description": "Fulfilling branch ID." },
         "branchName": { "type": "string", "description": "Fulfilling branch name." },
         "rating": { "type": "integer", "description": "Star rating from 1 to 5." },
         "comment": { "type": "string", "description": "Optional short customer comment." },
@@ -147,7 +163,7 @@
         "userId": { "type": "string", "description": "Firebase Auth UID of submitter." },
         "customerName": { "type": "string", "description": "Customer display name." },
         "customerEmail": { "type": "string", "description": "Customer Google email." },
-        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Branch ID being rated." },
+        "branchId": { "type": "string", "description": "Branch ID being rated." },
         "branchName": { "type": "string", "description": "Branch display name." },
         "foodRating": { "type": "integer", "description": "Food quality star rating from 1 to 5." },
         "serviceRating": { "type": "integer", "description": "Service star rating from 1 to 5." },
@@ -159,9 +175,13 @@
     }
   },
   "firestore": {
+    "/branches/{branchId}": {
+      "schema": { "$ref": "#/entities/CafeBranch" },
+      "description": "SuperAdmin-managed restaurant branches (supports 10+ unlimited branches)."
+    },
     "/menu_items/{itemId}": {
       "schema": { "$ref": "#/entities/MenuItem" },
-      "description": "Real-time Lahori Food Cafe menu catalog."
+      "description": "Global Lahori Food Cafe menu catalog."
     },
     "/promotions/{promoId}": {
       "schema": { "$ref": "#/entities/Promotion" },
@@ -181,11 +201,11 @@
     },
     "/branch_admins/{adminId}": {
       "schema": { "$ref": "#/entities/BranchAdminEntry" },
-      "description": "SuperAdmin-managed branch manager email assignments."
+      "description": "SuperAdmin-managed branch manager assignments locked by email and branchId."
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/CafeOrder" },
-      "description": "Customer and guest orders routed to branches."
+      "description": "Customer and guest orders routed to dynamic branches."
     },
     "/reviews/{reviewId}": {
       "schema": { "$ref": "#/entities/OrderReview" },

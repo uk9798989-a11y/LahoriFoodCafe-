@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.CafeRepository
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchDirectory
+import com.example.model.CafeBranch
 import com.example.model.CafeFeedback
 import com.example.model.CafeOrder
 import com.example.model.CartItem
@@ -121,8 +122,13 @@ class SessionCartController {
         )
     }
 
-    fun addGuestAddress(label: String, streetAddress: String, area: String): SavedAddress {
-        val branch = BranchDirectory.routeAddressToBranch("$area $streetAddress")
+    fun addGuestAddress(
+        label: String,
+        streetAddress: String,
+        area: String,
+        branches: List<CafeBranch> = BranchDirectory.defaultBranches
+    ): SavedAddress {
+        val branch = BranchDirectory.routeAddressToBranch("$area $streetAddress", branches)
         val addr = SavedAddress(
             id = "guest_addr_${UUID.randomUUID().toString().take(6)}",
             label = label.ifBlank { "Home" },
@@ -196,6 +202,9 @@ class LahoriViewModel(
     private val _isSavingStaff = MutableStateFlow(false)
     val isSavingStaff: StateFlow<Boolean> = _isSavingStaff.asStateFlow()
 
+    private val _isSavingBranch = MutableStateFlow(false)
+    val isSavingBranch: StateFlow<Boolean> = _isSavingBranch.asStateFlow()
+
     private val _branchAssignmentLoaded = MutableStateFlow(isSuperAdminByEmail || currentUserEmail.isBlank())
     val branchAssignmentLoaded: StateFlow<Boolean> = _branchAssignmentLoaded.asStateFlow()
 
@@ -211,6 +220,16 @@ class LahoriViewModel(
     private val lastSeenOrderStatuses = mutableMapOf<String, OrderStatus>()
     private val handledSurveyOrderIds = mutableSetOf<String>()
     private var initialOrderLoadComplete = false
+
+    val branchesList: StateFlow<List<CafeBranch>> = repository.observeBranches()
+        .map { branches -> branches.ifEmpty { BranchDirectory.defaultBranches } }
+        .catch { error ->
+            val firestoreError = unwrapFirestoreException(error)
+            if (firestoreError == null && error is CancellationException) throw error
+            Log.w(TAG, "Branches stream error", firestoreError ?: error)
+            emit(BranchDirectory.defaultBranches)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), BranchDirectory.defaultBranches)
 
     val menuState: StateFlow<UiState<List<MenuItem>>> = repository.observeMenuItems()
         .map<List<MenuItem>, UiState<List<MenuItem>>> { items ->
@@ -340,12 +359,16 @@ class LahoriViewModel(
             if (assignment == null || currentUserEmail.isBlank()) {
                 flowOf(UiState.Success(emptyList()))
             } else {
-                repository.observeBranchOrders(currentUserEmail, assignment.branchId)
+                repository.observeBranchOrders(assignment.branchId)
                     .map<List<CafeOrder>, UiState<List<CafeOrder>>> { UiState.Success(it) }
                     .catch { error ->
                         val firestoreError = unwrapFirestoreException(error)
                         if (firestoreError == null && error is CancellationException) throw error
-                        emit(UiState.Error((firestoreError ?: error).message ?: "Failed to load branch orders"))
+                        if (firestoreError?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                            emit(UiState.Error("Your branch access was updated or revoked by the Super Admin."))
+                        } else {
+                            emit(UiState.Error((firestoreError ?: error).message ?: "Failed to load branch orders"))
+                        }
                     }
             }
         }
@@ -420,6 +443,7 @@ class LahoriViewModel(
         viewModelScope.launch {
             repository.ensureUserProfile()
             if (isSuperAdminByEmail) {
+                repository.seedInitialBranches()
                 repository.seedInitialMenu()
                 repository.seedInitialPromotions()
             }
@@ -612,7 +636,13 @@ class LahoriViewModel(
 
     fun saveAddressAndRoute(label: String, streetAddress: String, area: String, onSaved: (SavedAddress) -> Unit) {
         viewModelScope.launch {
-            val res = repository.addSavedAddress(currentUserId, label, streetAddress, area)
+            val res = repository.addSavedAddress(
+                userId = currentUserId,
+                label = label,
+                streetAddress = streetAddress,
+                area = area,
+                knownBranches = branchesList.value
+            )
             res.onSuccess { addr ->
                 sessionCart.selectDeliveryAddress(addr)
                 onSaved(addr)
@@ -632,7 +662,7 @@ class LahoriViewModel(
         val addressText = if (s.orderType == OrderType.DELIVERY) {
             s.selectedAddressStreet.ifBlank { "Lahore Delivery" }
         } else {
-            "Self Pickup — ${BranchDirectory.byId(s.selectedBranchId).shortAddress}"
+            "Self Pickup — ${BranchDirectory.byId(s.selectedBranchId, branchesList.value).shortAddress}"
         }
         viewModelScope.launch {
             val res = repository.placeOrder(
@@ -730,6 +760,53 @@ class LahoriViewModel(
             val res = repository.seedInitialMenu()
             if (res.isFailure) {
                 _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Failed to seed menu"
+            }
+        }
+    }
+
+    fun saveBranch(
+        branchId: String?,
+        name: String,
+        shortLabel: String,
+        shortAddress: String,
+        areas: List<String>,
+        active: Boolean,
+        sortOrder: Long? = null,
+        onDone: (String) -> Unit
+    ) {
+        if (_isSavingBranch.value) return
+        _isSavingBranch.value = true
+        viewModelScope.launch {
+            val res = repository.saveBranch(
+                branchId = branchId,
+                name = name,
+                shortLabel = shortLabel,
+                shortAddress = shortAddress,
+                areas = areas,
+                active = active,
+                sortOrder = sortOrder
+            )
+            _isSavingBranch.value = false
+            res.onSuccess { savedId -> onDone(savedId) }.onFailure { err ->
+                _actionError.value = err.localizedMessage ?: "Failed to save branch"
+            }
+        }
+    }
+
+    fun deleteBranch(branchId: String) {
+        viewModelScope.launch {
+            val res = repository.deleteBranch(branchId)
+            if (res.isFailure) {
+                _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Failed to delete branch"
+            }
+        }
+    }
+
+    fun seedBranchesNow() {
+        viewModelScope.launch {
+            val res = repository.seedInitialBranches()
+            if (res.isFailure) {
+                _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Failed to seed default branches"
             }
         }
     }

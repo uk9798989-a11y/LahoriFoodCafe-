@@ -5,6 +5,7 @@ import com.example.BuildConfig
 import com.example.R
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchDirectory
+import com.example.model.CafeBranch
 import com.example.model.CafeFeedback
 import com.example.model.CafeOrder
 import com.example.model.CartItem
@@ -49,6 +50,226 @@ class CafeRepository(
     private fun requireUserId(): String {
         return auth.currentUser?.uid
             ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
+    }
+
+    private suspend fun resolveBranch(branchId: String): CafeBranch {
+        val cleanId = branchId.trim()
+        if (cleanId.isNotBlank()) {
+            try {
+                val snap = db.collection("branches").document(cleanId).get().await()
+                if (snap.exists()) {
+                    val parsed = snap.toObject(CafeBranch::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    if (parsed != null && parsed.name.isNotBlank()) {
+                        return parsed
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
+        }
+        return BranchDirectory.byId(cleanId.ifBlank { BranchDirectory.branch1.id })
+    }
+
+    // 0. Dynamic Multi-Branch Directory
+    fun observeBranches(): Flow<List<CafeBranch>> {
+        val path = "branches"
+        return db.collection(path)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(CafeBranch::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedWith(compareBy<CafeBranch> { it.sortOrder }.thenBy { it.id })
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
+    }
+
+    suspend fun seedInitialBranches(): Result<Unit> {
+        val path = "branches"
+        return try {
+            requireUserId()
+            val existing = db.collection(path).limit(1).get().await()
+            if (!existing.isEmpty) return Result.success(Unit)
+            val batch = db.batch()
+            BranchDirectory.defaultBranches.forEach { branch ->
+                val docRef = db.collection(path).document(branch.id)
+                batch.set(
+                    docRef,
+                    mapOf(
+                        "name" to branch.name,
+                        "shortLabel" to branch.shortLabel,
+                        "shortAddress" to branch.shortAddress,
+                        "areas" to branch.areas,
+                        "active" to branch.active,
+                        "sortOrder" to branch.sortOrder,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveBranch(
+        branchId: String?,
+        name: String,
+        shortLabel: String,
+        shortAddress: String,
+        areas: List<String>,
+        active: Boolean,
+        sortOrder: Long? = null
+    ): Result<String> {
+        var docPath = "branches"
+        return try {
+            requireUserId()
+            val cleanName = name.trim().take(80)
+            val cleanShortLabel = shortLabel.trim()
+                .ifBlank { cleanName.substringAfter("— ").trim() }
+                .take(40)
+            val cleanAddress = shortAddress.trim().take(160)
+            val cleanAreas = areas
+                .map { it.trim().take(50) }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .take(30)
+
+            require(cleanName.length in 2..80) { "Branch name must be 2 to 80 characters" }
+            require(cleanShortLabel.length in 2..40) { "Short label must be 2 to 40 characters" }
+            require(cleanAddress.length in 3..160) { "Address must be 3 to 160 characters" }
+
+            if (branchId.isNullOrBlank()) {
+                val existingDocs = db.collection("branches").get().await().documents
+                val existingIds = existingDocs.map { it.id }.toSet()
+                val maxNum = existingIds
+                    .mapNotNull { Regex("^branch_(\\d+)$").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+                    .maxOrNull()
+                    ?: 2
+                var candidateNum = (maxNum + 1).coerceAtLeast(1)
+                while (existingIds.contains("branch_$candidateNum")) {
+                    candidateNum++
+                }
+                val newId = "branch_$candidateNum"
+                val finalOrder = (sortOrder ?: candidateNum.toLong()).coerceIn(0L, 10000L)
+                val docRef = db.collection("branches").document(newId)
+                docPath = docRef.path
+                docRef.set(
+                    mapOf(
+                        "name" to cleanName,
+                        "shortLabel" to cleanShortLabel,
+                        "shortAddress" to cleanAddress,
+                        "areas" to cleanAreas,
+                        "active" to active,
+                        "sortOrder" to finalOrder,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+                Result.success(newId)
+            } else {
+                val cleanId = branchId.trim()
+                require(Regex("^[a-zA-Z0-9_\\-]{1,64}$").matches(cleanId)) { "Invalid branch ID" }
+                val docRef = db.collection("branches").document(cleanId)
+                docPath = docRef.path
+                val existingSnap = docRef.get().await()
+                val currentSortOrder = existingSnap.getLong("sortOrder") ?: 1L
+                val finalOrder = (sortOrder ?: currentSortOrder).coerceIn(0L, 10000L)
+                if (existingSnap.exists()) {
+                    docRef.update(
+                        mapOf(
+                            "name" to cleanName,
+                            "shortLabel" to cleanShortLabel,
+                            "shortAddress" to cleanAddress,
+                            "areas" to cleanAreas,
+                            "active" to active,
+                            "sortOrder" to finalOrder,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                } else {
+                    docRef.set(
+                        mapOf(
+                            "name" to cleanName,
+                            "shortLabel" to cleanShortLabel,
+                            "shortAddress" to cleanAddress,
+                            "areas" to cleanAreas,
+                            "active" to active,
+                            "sortOrder" to finalOrder,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
+
+                // Keep assigned staff docs synchronized with updated branch display name
+                try {
+                    val staffDocs = db.collection("branch_admins")
+                        .whereEqualTo("branchId", cleanId)
+                        .get()
+                        .await()
+                        .documents
+                    for (staffDoc in staffDocs) {
+                        staffDoc.reference.update(
+                            mapOf(
+                                "branchName" to cleanName,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        ).await()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                }
+
+                Result.success(cleanId)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteBranch(branchId: String): Result<Unit> {
+        val cleanId = branchId.trim()
+        val docPath = "branches/$cleanId"
+        return try {
+            requireUserId()
+            require(cleanId.isNotBlank()) { "Branch ID is required" }
+            db.collection("branches").document(cleanId).delete().await()
+            try {
+                val staffDocs = db.collection("branch_admins")
+                    .whereEqualTo("branchId", cleanId)
+                    .get()
+                    .await()
+                    .documents
+                staffDocs.forEach { it.reference.delete().await() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docPath)
+            Result.failure(e)
+        }
     }
 
     // 1. Real-time Menu Items
@@ -383,7 +604,13 @@ class CafeRepository(
             }
     }
 
-    suspend fun addSavedAddress(userId: String, label: String, streetAddress: String, area: String): Result<SavedAddress> {
+    suspend fun addSavedAddress(
+        userId: String,
+        label: String,
+        streetAddress: String,
+        area: String,
+        knownBranches: List<CafeBranch> = emptyList()
+    ): Result<SavedAddress> {
         val path = "users/$userId/addresses"
         return try {
             val uid = requireUserId()
@@ -394,7 +621,18 @@ class CafeRepository(
             require(cleanStreet.length >= 3) { "Please enter a street address (min 3 characters)" }
             require(cleanArea.isNotBlank()) { "Please enter a neighborhood/area" }
 
-            val routedBranch = BranchDirectory.routeAddressToBranch("$cleanArea $cleanStreet")
+            val activeBranches = knownBranches.ifEmpty {
+                try {
+                    db.collection("branches").get().await()
+                        .toObjects(CafeBranch::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            }.ifEmpty { BranchDirectory.defaultBranches }
+
+            val routedBranch = BranchDirectory.routeAddressToBranch("$cleanArea $cleanStreet", activeBranches)
             val docRef = db.collection("users").document(uid).collection("addresses").document()
             val payload = mapOf(
                 "label" to cleanLabel,
@@ -479,13 +717,15 @@ class CafeRepository(
             require(cleanEmail.contains("@") && cleanEmail.contains(".") && cleanEmail.length in 5..120) {
                 "Enter a valid staff email address"
             }
-            val normalizedRole = if (role.equals(UserRole.BranchAdmin.name, ignoreCase = true)) {
-                UserRole.BranchAdmin.name
-            } else {
-                UserRole.BranchAdmin.name
+            require(!cleanEmail.equals(SUPER_ADMIN_EMAIL, ignoreCase = true)) {
+                "SuperAdmin email cannot be downgraded to BranchAdmin"
             }
-            val branch = BranchDirectory.byId(branchId)
-            val docId = "mgr_${sha256Hex(cleanEmail).take(24)}"
+            val normalizedRole = UserRole.BranchAdmin.name
+            val branch = resolveBranch(branchId)
+
+            // Document ID matches lowercase email so Firestore rules resolve
+            // /branch_admins/{lowercaseEmail} in O(1) with instant revocation.
+            val docId = cleanEmail
             val docRef = db.collection("branch_admins").document(docId)
             docPath = docRef.path
 
@@ -513,7 +753,7 @@ class CafeRepository(
                 ).await()
             }
 
-            // Also remove any legacy random-ID duplicate docs for the same email if present
+            // Clean up any legacy hashed/random-ID docs for the same email
             try {
                 val duplicates = db.collection("branch_admins")
                     .whereEqualTo("email", cleanEmail)
@@ -546,9 +786,6 @@ class CafeRepository(
             } catch (_: Exception) {
             }
 
-            // Sync existing branch orders so newly assigned manager immediately sees active branch orders
-            syncManagerEmailAcrossBranchOrders(cleanEmail, assignedBranchId = branch.id)
-
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -565,6 +802,7 @@ class CafeRepository(
             val docRef = db.collection("branch_admins").document(adminId)
             val snap = docRef.get().await()
             val removedEmail = snap.getString("email")?.trim()?.lowercase().orEmpty()
+                .ifBlank { if (adminId.contains("@")) adminId.trim().lowercase() else "" }
             docRef.delete().await()
 
             if (removedEmail.isNotBlank()) {
@@ -585,8 +823,6 @@ class CafeRepository(
                     throw e
                 } catch (_: Exception) {
                 }
-
-                syncManagerEmailAcrossBranchOrders(removedEmail, assignedBranchId = null)
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -594,57 +830,6 @@ class CafeRepository(
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, path)
             Result.failure(e)
-        }
-    }
-
-    private suspend fun syncManagerEmailAcrossBranchOrders(
-        managerEmail: String,
-        assignedBranchId: String?
-    ) {
-        try {
-            val ordersSnap = db.collection("orders").get().await()
-            if (ordersSnap.isEmpty) return
-            var batch = db.batch()
-            var ops = 0
-
-            suspend fun flush(force: Boolean = false) {
-                if ((ops >= 400) || (force && ops > 0)) {
-                    batch.commit().await()
-                    batch = db.batch()
-                    ops = 0
-                }
-            }
-
-            for (doc in ordersSnap.documents) {
-                val orderBranch = doc.getString("branchId").orEmpty()
-                val currentEmails = (doc.get("branchAdminEmails") as? List<*>)
-                    ?.mapNotNull { (it as? String)?.trim()?.lowercase() }
-                    ?.distinct()
-                    .orEmpty()
-                val shouldContain = assignedBranchId != null && orderBranch == assignedBranchId
-                val updatedEmails = if (shouldContain) {
-                    if (currentEmails.contains(managerEmail)) null
-                    else (currentEmails + managerEmail).distinct().take(10)
-                } else {
-                    if (!currentEmails.contains(managerEmail)) null
-                    else currentEmails.filterNot { it == managerEmail }.take(10)
-                }
-                if (updatedEmails != null) {
-                    batch.update(
-                        doc.reference,
-                        mapOf(
-                            "branchAdminEmails" to updatedEmails,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    )
-                    ops++
-                    flush()
-                }
-            }
-            flush(force = true)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
         }
     }
 
@@ -696,11 +881,9 @@ class CafeRepository(
             }
     }
 
-    fun observeBranchOrders(adminEmail: String, branchId: String): Flow<List<CafeOrder>> {
+    fun observeBranchOrders(branchId: String): Flow<List<CafeOrder>> {
         val path = "orders"
-        val cleanEmail = adminEmail.trim().lowercase()
         return db.collection(path)
-            .whereArrayContains("branchAdminEmails", cleanEmail)
             .whereEqualTo("branchId", branchId)
             .snapshots()
             .map { snapshot ->
@@ -760,20 +943,7 @@ class CafeRepository(
             val cleanPhone = customerPhone.trim().take(30)
             val cleanAddress = deliveryAddress.trim().take(250)
             val cleanPromo = promoCode.trim().uppercase().take(30)
-            val branch = BranchDirectory.byId(branchId)
-
-            val branchManagers = try {
-                db.collection("branch_admins")
-                    .whereEqualTo("branchId", branch.id)
-                    .get()
-                    .await()
-                    .documents
-                    .mapNotNull { it.getString("email")?.lowercase() }
-                    .distinct()
-                    .take(10)
-            } catch (_: Exception) {
-                emptyList()
-            }
+            val branch = resolveBranch(branchId)
 
             val lineItems = cartItems.take(30).map { cart ->
                 OrderLineItem(
@@ -803,7 +973,7 @@ class CafeRepository(
                 "deliveryAddress" to cleanAddress,
                 "branchId" to branch.id,
                 "branchName" to branch.name,
-                "branchAdminEmails" to branchManagers,
+                "branchAdminEmails" to emptyList<String>(),
                 "items" to lineItems.map { it.toMap() },
                 "itemsSummary" to summary,
                 "promoCode" to cleanPromo,
@@ -1078,7 +1248,7 @@ class CafeRepository(
                 .ifBlank { "Lahori Food Cafe Order" }
                 .trim()
                 .take(300)
-            val branch = BranchDirectory.byId(order.branchId)
+            val branch = resolveBranch(order.branchId)
 
             val docRef = db.collection("reviews").document(order.id)
             val existing = docRef.get().await()
@@ -1156,7 +1326,7 @@ class CafeRepository(
                 .ifBlank { "Lahori Customer" }
                 .take(80)
             val cleanEmail = (user.email ?: "").trim().take(120)
-            val branch = BranchDirectory.byId(branchId)
+            val branch = resolveBranch(branchId)
 
             val docRef = db.collection("feedback").document()
             docPath = docRef.path

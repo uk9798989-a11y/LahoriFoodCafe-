@@ -83,6 +83,7 @@ import com.example.ui.components.LahoriBottomBar
 import com.example.ui.components.LahoriSplashOverlay
 import com.example.ui.components.LahoriTopHeader
 import com.example.ui.components.OrderReviewSurveySheet
+import com.example.ui.components.PickupBranchBottomSheet
 import com.example.ui.components.SavedAddressesBottomSheet
 import com.example.ui.components.SplashSessionState
 import com.example.ui.screens.AccountScreen
@@ -300,6 +301,7 @@ private fun GuestCafeShell(
     var searchVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showSavedAddressesSheet by remember { mutableStateOf(false) }
+    var showPickupBranchSheet by remember { mutableStateOf(false) }
     var showBucketSheet by remember { mutableStateOf(false) }
 
     val cartQuantities = remember(sessionState.cartItems) {
@@ -328,6 +330,7 @@ private fun GuestCafeShell(
                 },
                 onPickupClick = {
                     sessionCart.setOrderType(OrderType.PICKUP)
+                    showPickupBranchSheet = true
                 }
             )
         },
@@ -408,6 +411,18 @@ private fun GuestCafeShell(
                     .padding(16.dp)
             )
         }
+    }
+
+    if (showPickupBranchSheet) {
+        PickupBranchBottomSheet(
+            branches = BranchDirectory.defaultBranches,
+            selectedBranchId = sessionState.selectedBranchId,
+            onSelectBranch = { branch ->
+                sessionCart.selectPickupBranch(branch.id)
+                showPickupBranchSheet = false
+            },
+            onDismiss = { showPickupBranchSheet = false }
+        )
     }
 
     if (showSavedAddressesSheet) {
@@ -527,6 +542,7 @@ private fun AuthenticatedCafeShell(
     )
 
     val sessionState by sessionCart.state.collectAsStateWithLifecycle()
+    val branchesList by viewModel.branchesList.collectAsStateWithLifecycle()
     val menuState by viewModel.menuState.collectAsStateWithLifecycle()
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val savedAddresses by viewModel.savedAddresses.collectAsStateWithLifecycle()
@@ -544,6 +560,7 @@ private fun AuthenticatedCafeShell(
     val isSubmittingReview by viewModel.isSubmittingReview.collectAsStateWithLifecycle()
     val isSubmittingFeedback by viewModel.isSubmittingFeedback.collectAsStateWithLifecycle()
     val isSavingStaff by viewModel.isSavingStaff.collectAsStateWithLifecycle()
+    val isSavingBranch by viewModel.isSavingBranch.collectAsStateWithLifecycle()
     val branchAssignmentLoaded by viewModel.branchAssignmentLoaded.collectAsStateWithLifecycle()
     val trackedOrderState by viewModel.trackedOrderState.collectAsStateWithLifecycle()
     val fcmTokenRegistered by viewModel.fcmTokenRegistered.collectAsStateWithLifecycle()
@@ -616,6 +633,7 @@ private fun AuthenticatedCafeShell(
     var searchVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showSavedAddressesSheet by remember { mutableStateOf(false) }
+    var showPickupBranchSheet by remember { mutableStateOf(false) }
     var showBucketSheet by remember { mutableStateOf(false) }
     var isSubmittingOrder by remember { mutableStateOf(false) }
     var showSuperAdminDashboard by remember { mutableStateOf(false) }
@@ -647,6 +665,13 @@ private fun AuthenticatedCafeShell(
             promotions = promotionsList,
             reviews = allReviews,
             isSavingStaff = isSavingStaff,
+            branches = branchesList,
+            isSavingBranch = isSavingBranch,
+            onSaveBranch = { branchId, name, shortLabel, shortAddress, areas, active, sortOrder, done ->
+                viewModel.saveBranch(branchId, name, shortLabel, shortAddress, areas, active, sortOrder, done)
+            },
+            onDeleteBranch = { viewModel.deleteBranch(it) },
+            onSeedBranches = { viewModel.seedBranchesNow() },
             onUpdateOrderStatus = { orderId, status -> viewModel.updateOrderStatus(orderId, status) },
             onSaveMenuItem = { id, name, desc, cat, price, imgKey, badge, avail, sort, done ->
                 viewModel.saveMenuItem(id, name, desc, cat, price, imgKey, badge, avail, sort, done)
@@ -709,7 +734,8 @@ private fun AuthenticatedCafeShell(
                         }
                         onSignOut()
                     }
-                }
+                },
+                branches = branchesList
             )
             SnackbarHost(
                 hostState = snackbarHostState,
@@ -728,7 +754,8 @@ private fun AuthenticatedCafeShell(
             ordersState = branchOrdersState,
             onUpdateOrderStatus = { orderId, status -> viewModel.updateOrderStatus(orderId, status) },
             onBack = { showBranchAdminDashboard = false },
-            managerEmail = userEmail
+            managerEmail = userEmail,
+            branches = branchesList
         )
         return
     }
@@ -782,7 +809,9 @@ private fun AuthenticatedCafeShell(
                 },
                 onPickupClick = {
                     sessionCart.setOrderType(OrderType.PICKUP)
-                }
+                    showPickupBranchSheet = true
+                },
+                branches = branchesList
             )
         },
         bottomBar = {
@@ -884,7 +913,8 @@ private fun AuthenticatedCafeShell(
                                 }
                             }
                         )
-                    }
+                    },
+                    branches = branchesList
                 )
             }
 
@@ -944,6 +974,18 @@ private fun AuthenticatedCafeShell(
         }
     }
 
+    if (showPickupBranchSheet) {
+        PickupBranchBottomSheet(
+            branches = branchesList,
+            selectedBranchId = sessionState.selectedBranchId,
+            onSelectBranch = { branch ->
+                sessionCart.selectPickupBranch(branch.id)
+                showPickupBranchSheet = false
+            },
+            onDismiss = { showPickupBranchSheet = false }
+        )
+    }
+
     if (showSavedAddressesSheet) {
         SavedAddressesBottomSheet(
             savedAddresses = savedAddresses,
@@ -957,7 +999,8 @@ private fun AuthenticatedCafeShell(
                 }
             },
             onStartOrder = { showSavedAddressesSheet = false },
-            onDismiss = { showSavedAddressesSheet = false }
+            onDismiss = { showSavedAddressesSheet = false },
+            branches = branchesList
         )
     }
 
@@ -978,7 +1021,7 @@ private fun AuthenticatedCafeShell(
                     showBucketSheet = false
                     currentTab = CafeTab.Orders
                     viewModel.startTrackingOrder(orderId)
-                    val branch = BranchDirectory.byId(sessionState.selectedBranchId)
+                    val branch = BranchDirectory.byId(sessionState.selectedBranchId, branchesList)
                     OrderNotificationHelper.notifyOrderStatus(
                         context = context,
                         orderId = orderId,
@@ -989,7 +1032,8 @@ private fun AuthenticatedCafeShell(
                     )
                 }
             },
-            onDismiss = { showBucketSheet = false }
+            onDismiss = { showBucketSheet = false },
+            branches = branchesList
         )
     }
 

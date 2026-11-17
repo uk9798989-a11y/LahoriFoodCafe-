@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchDirectory
+import com.example.model.CafeBranch
 import com.example.model.CafeFeedback
 import com.example.model.CafeOrder
 import com.example.model.OrderReview
@@ -94,7 +95,8 @@ fun AccountScreen(
         comment: String,
         onComplete: () -> Unit
     ) -> Unit = { _, _, _, _, _ -> },
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    branches: List<CafeBranch> = BranchDirectory.defaultBranches
 ) {
     var selectedHistoryOrder by remember { mutableStateOf<CafeOrder?>(null) }
 
@@ -323,7 +325,8 @@ fun AccountScreen(
                 isSubmitting = isSubmittingFeedback,
                 recentFeedback = recentFeedback,
                 onSignInClick = onSignInClick,
-                onSubmitFeedback = onSubmitCafeFeedback
+                onSubmitFeedback = onSubmitCafeFeedback,
+                branches = branches
             )
         }
 
@@ -371,7 +374,7 @@ fun AccountScreen(
                     Icon(Icons.Filled.Storefront, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Branch Manager Dashboard (${branchAdminAssignment?.branchId ?: "Branch"})",
+                        text = "Branch Manager Dashboard (${branchAdminAssignment?.let { BranchDirectory.shortPickerLabel(it.branchId, branches) } ?: "Branch"})",
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                     )
                 }

@@ -168,8 +168,20 @@ test("Order isolation, guest checkout payload, and BranchAdmin scoping", async (
   await assertFails(custBDb.collection("orders").doc("order_1").get());
   await assertFails(custADb.collection("orders").doc("order_1").update({ status: "Delivered", updatedAt: new Date(Date.now() - 1000) }));
 
-  // BranchAdmin can query assigned branch orders and update status
-  await assertSucceeds(branchMgrDb.collection("orders").where("branchAdminEmails", "array-contains", BRANCH_1_EMAIL).where("branchId", "==", "branch_1").get());
+  // Seed BranchAdmin assignment doc keyed by lowercase email
+  await assertSucceeds(
+    superDb.collection("branch_admins").doc(BRANCH_1_EMAIL).set({
+      email: BRANCH_1_EMAIL,
+      role: "BranchAdmin",
+      branchId: "branch_1",
+      branchName: "Lahori Cafe Gulberg",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // BranchAdmin can query assigned branch orders via branchId and update status
+  await assertSucceeds(branchMgrDb.collection("orders").where("branchId", "==", "branch_1").get());
   await assertSucceeds(branchMgrDb.collection("orders").doc("order_1").update({ status: "Preparing", updatedAt: new Date(Date.now() - 1000) }));
 
   // SuperAdmin can list all orders across branches
@@ -347,39 +359,66 @@ test("Feedback: Owner can submit food & service ratings and query own feedback; 
   await assertSucceeds(superDb.collection("feedback").doc("fb_1").delete());
 });
 
-test("BranchAdmin staff mapping: only SuperAdmin manages staff; BranchManager sees only assigned branch orders", async () => {
+test("Multi-branch scalability: SuperAdmin manages unlimited branches & multiple branch admins with strict per-branch isolation and instant revocation", async () => {
   const custADb = testEnv.authenticatedContext(CUSTOMER_A, { email: "custA@gmail.com", email_verified: true }).firestore();
-  const branch1Db = testEnv.authenticatedContext(BRANCH_MGR_UID, { email: BRANCH_1_EMAIL, email_verified: true }).firestore();
-  const branch2Db = testEnv.authenticatedContext("branch2_mgr_uid", { email: "branch2.manager@gmail.com", email_verified: true }).firestore();
+  const branch1MgrADb = testEnv.authenticatedContext(BRANCH_MGR_UID, { email: BRANCH_1_EMAIL, email_verified: true }).firestore();
+  const branch1MgrBDb = testEnv.authenticatedContext("b1_mgr2_uid", { email: "branch1.shift2@gmail.com", email_verified: true }).firestore();
+  const branch10MgrDb = testEnv.authenticatedContext("b10_mgr_uid", { email: "branch10.mgr@gmail.com", email_verified: true }).firestore();
   const superDb = testEnv.authenticatedContext(SUPER_ADMIN_UID, { email: SUPER_ADMIN_EMAIL, email_verified: true }).firestore();
   const now = new Date(Date.now() - 2000);
 
-  const staffPayload = {
-    email: BRANCH_1_EMAIL,
-    role: "BranchAdmin",
-    branchId: "branch_1",
-    branchName: "Lahori Food Cafe — Gulberg III",
+  const branch10Payload = {
+    name: "Lahori Food Cafe — Bahria Orchard",
+    shortLabel: "Branch 10 (Bahria)",
+    shortAddress: "Commercial Hub, Bahria Orchard, Lahore",
+    areas: ["Bahria Orchard", "Raiwind Road"],
+    active: true,
+    sortOrder: 10,
     createdAt: now,
     updatedAt: now,
   };
 
-  // Customer and BranchAdmin cannot assign themselves or others in branch_admins
-  await assertFails(custADb.collection("branch_admins").doc("mgr_1").set(staffPayload));
-  await assertFails(branch1Db.collection("branch_admins").doc("mgr_1").set(staffPayload));
+  // Only SuperAdmin can create/modify branches; BranchAdmins & Customers can read branches
+  await assertFails(custADb.collection("branches").doc("branch_10").set(branch10Payload));
+  await assertFails(branch1MgrADb.collection("branches").doc("branch_10").set(branch10Payload));
+  await assertSucceeds(superDb.collection("branches").doc("branch_10").set(branch10Payload));
+  await assertSucceeds(custADb.collection("branches").get());
 
-  // Invalid role or invalid branchId rejected even for SuperAdmin
-  await assertFails(superDb.collection("branch_admins").doc("mgr_bad_role").set({ ...staffPayload, role: "SuperAdmin" }));
-  await assertFails(superDb.collection("branch_admins").doc("mgr_bad_branch").set({ ...staffPayload, branchId: "branch_9" }));
+  // Assign multiple admins to branch_1 and an admin to dynamic branch_10
+  await assertFails(
+    custADb.collection("branch_admins").doc(BRANCH_1_EMAIL).set({
+      email: BRANCH_1_EMAIL, role: "BranchAdmin", branchId: "branch_1", branchName: "Gulberg", createdAt: now, updatedAt: now,
+    })
+  );
+  await assertFails(
+    superDb.collection("branch_admins").doc(BRANCH_1_EMAIL).set({
+      email: BRANCH_1_EMAIL, role: "SuperAdmin", branchId: "branch_1", branchName: "Gulberg", createdAt: now, updatedAt: now,
+    })
+  );
 
-  // SuperAdmin creates valid BranchAdmin assignment
-  await assertSucceeds(superDb.collection("branch_admins").doc("mgr_1").set(staffPayload));
+  await assertSucceeds(
+    superDb.collection("branch_admins").doc(BRANCH_1_EMAIL).set({
+      email: BRANCH_1_EMAIL, role: "BranchAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe — Gulberg III", createdAt: now, updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    superDb.collection("branch_admins").doc("branch1.shift2@gmail.com").set({
+      email: "branch1.shift2@gmail.com", role: "BranchAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe — Gulberg III", createdAt: now, updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    superDb.collection("branch_admins").doc("branch10.mgr@gmail.com").set({
+      email: "branch10.mgr@gmail.com", role: "BranchAdmin", branchId: "branch_10", branchName: branch10Payload.name, createdAt: now, updatedAt: now,
+    })
+  );
 
-  // Assigned BranchAdmin can query own email mapping; other users cannot read it
-  await assertSucceeds(branch1Db.collection("branch_admins").where("email", "==", BRANCH_1_EMAIL).get());
+  // Branch admin can query ONLY own staff record
+  await assertSucceeds(branch10MgrDb.collection("branch_admins").where("email", "==", "branch10.mgr@gmail.com").get());
+  await assertFails(branch10MgrDb.collection("branch_admins").get());
   await assertFails(custADb.collection("branch_admins").where("email", "==", BRANCH_1_EMAIL).get());
 
-  // Seed orders across branch_1 and branch_2
-  const branch1Order = {
+  // Customer places orders at branch_1 and branch_10
+  const baseOrder = {
     userId: CUSTOMER_A,
     guestSessionId: "",
     guestCheckout: false,
@@ -388,8 +427,6 @@ test("BranchAdmin staff mapping: only SuperAdmin manages staff; BranchManager se
     customerPhone: "03001234567",
     orderType: "PICKUP",
     deliveryAddress: "Self Pickup",
-    branchId: "branch_1",
-    branchName: "Lahori Food Cafe — Gulberg III",
     branchAdminEmails: [],
     items: [{ itemId: "zinger_1", name: "Zinger Burger", quantity: 1, unitPricePkr: 350, lineTotalPkr: 350 }],
     itemsSummary: "1x Zinger Burger",
@@ -402,33 +439,32 @@ test("BranchAdmin staff mapping: only SuperAdmin manages staff; BranchManager se
     createdAt: now,
     updatedAt: now,
   };
-  const branch2Order = {
-    ...branch1Order,
-    branchId: "branch_2",
-    branchName: "Lahori Food Cafe — DHA Phase 5",
-    branchAdminEmails: ["branch2.manager@gmail.com"],
-  };
 
-  await assertSucceeds(custADb.collection("orders").doc("ord_b1").set(branch1Order));
-  await assertSucceeds(custADb.collection("orders").doc("ord_b2").set(branch2Order));
+  await assertSucceeds(custADb.collection("orders").doc("ord_b1").set({ ...baseOrder, branchId: "branch_1", branchName: "Lahori Food Cafe — Gulberg III" }));
+  await assertSucceeds(custADb.collection("orders").doc("ord_b10").set({ ...baseOrder, branchId: "branch_10", branchName: branch10Payload.name }));
 
-  // SuperAdmin syncs branchAdminEmails on pre-existing branch_1 order
-  await assertSucceeds(
-    superDb.collection("orders").doc("ord_b1").update({
-      branchAdminEmails: [BRANCH_1_EMAIL],
-      updatedAt: new Date(Date.now() - 1000),
-    })
-  );
+  // Both branch_1 admins see branch_1 order immediately (even without branchAdminEmails backfill); CANNOT see branch_10
+  await assertSucceeds(branch1MgrADb.collection("orders").where("branchId", "==", "branch_1").get());
+  await assertSucceeds(branch1MgrBDb.collection("orders").where("branchId", "==", "branch_1").get());
+  await assertSucceeds(branch1MgrBDb.collection("orders").doc("ord_b1").update({ status: "Preparing", updatedAt: new Date(Date.now() - 500) }));
+  await assertFails(branch1MgrADb.collection("orders").where("branchId", "==", "branch_10").get());
+  await assertFails(branch1MgrADb.collection("orders").doc("ord_b10").get());
+  await assertFails(branch1MgrADb.collection("orders").get()); // unfiltered denied
 
-  // Branch 1 manager queries branch_1 orders & updates status, but CANNOT access branch_2 or mutate menu/staff
-  await assertSucceeds(
-    branch1Db.collection("orders").where("branchAdminEmails", "array-contains", BRANCH_1_EMAIL).where("branchId", "==", "branch_1").get()
-  );
-  await assertSucceeds(branch1Db.collection("orders").doc("ord_b1").update({ status: "Preparing", updatedAt: new Date(Date.now() - 500) }));
-  await assertFails(branch1Db.collection("orders").doc("ord_b2").get());
-  await assertFails(branch2Db.collection("orders").doc("ord_b1").get());
-  await assertFails(branch1Db.collection("menu_items").doc("hack").delete());
+  // branch_10 manager sees ONLY branch_10 orders; CANNOT touch branch_1 or global menu/branches
+  await assertSucceeds(branch10MgrDb.collection("orders").where("branchId", "==", "branch_10").get());
+  await assertSucceeds(branch10MgrDb.collection("orders").doc("ord_b10").update({ status: "Preparing", updatedAt: new Date(Date.now() - 400) }));
+  await assertFails(branch10MgrDb.collection("orders").doc("ord_b1").get());
+  await assertFails(branch10MgrDb.collection("orders").doc("ord_b1").update({ status: "Delivered", updatedAt: new Date(Date.now() - 300) }));
+  await assertFails(branch10MgrDb.collection("menu_items").doc("hack").delete());
+
+  // Instant revocation: deleting branch1.shift2@gmail.com immediately blocks branch_1 access
+  await assertSucceeds(superDb.collection("branch_admins").doc("branch1.shift2@gmail.com").delete());
+  await assertFails(branch1MgrBDb.collection("orders").where("branchId", "==", "branch_1").get());
+  await assertFails(branch1MgrBDb.collection("orders").doc("ord_b1").get());
+  await assertFails(branch1MgrBDb.collection("orders").doc("ord_b1").update({ status: "Dispatched", updatedAt: new Date(Date.now() - 200) }));
 });
+
 
 
 

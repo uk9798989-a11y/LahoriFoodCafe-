@@ -7,6 +7,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -56,12 +58,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.model.BranchDirectory
+import com.example.model.CafeBranch
 import com.example.model.CafeFeedback
 import com.example.ui.theme.LahoriGold
 import com.example.ui.theme.LahoriRed
 import com.example.ui.theme.LahoriSuccess
 import com.example.ui.theme.LahoriWhite
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AccountFeedbackCard(
     isSignedIn: Boolean,
@@ -76,9 +80,16 @@ fun AccountFeedbackCard(
         comment: String,
         onComplete: () -> Unit
     ) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    branches: List<CafeBranch> = BranchDirectory.defaultBranches
 ) {
-    var selectedBranchId by remember(defaultBranchId) { mutableStateOf(defaultBranchId) }
+    val activeBranches = remember(branches) {
+        branches.filter { it.active }.ifEmpty { branches.ifEmpty { BranchDirectory.defaultBranches } }
+    }
+    var selectedBranchId by remember(defaultBranchId, activeBranches) {
+        val valid = activeBranches.any { it.id == defaultBranchId }
+        mutableStateOf(if (valid) defaultBranchId else activeBranches.first().id)
+    }
     var foodRating by remember { mutableIntStateOf(5) }
     var serviceRating by remember { mutableIntStateOf(5) }
     var commentText by remember { mutableStateOf("") }
@@ -163,13 +174,14 @@ fun AccountFeedbackCard(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Row(
+                    FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        BranchDirectory.allBranches.forEach { branch ->
+                        activeBranches.forEach { branch ->
                             val selected = selectedBranchId == branch.id
-                            val shortTitle = branch.name.substringAfter("— ").trim()
+                            val shortTitle = branch.displayShortLabel()
                             FilterChip(
                                 selected = selected,
                                 onClick = {
