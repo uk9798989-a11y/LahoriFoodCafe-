@@ -1,0 +1,258 @@
+const {
+  initializeTestEnvironment,
+  assertFails,
+  assertSucceeds,
+} = require("@firebase/rules-unit-testing");
+const { test, before, after, beforeEach } = require("node:test");
+const fs = require("node:fs");
+
+let testEnv;
+const PROJECT_ID = process.env.GCP_PROJECT || "demo-no-project";
+const CUSTOMER_A = "customer_a_uid";
+const CUSTOMER_B = "customer_b_uid";
+const BRANCH_MGR_UID = "branch_mgr_uid";
+const SUPER_ADMIN_UID = "super_admin_uid";
+const SUPER_ADMIN_EMAIL = "uk9798989@gmail.com";
+const BRANCH_1_EMAIL = "branch1.manager@gmail.com";
+
+const [emulatorHost, emulatorPortStr] = (process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085").split(":");
+const emulatorPort = parseInt(emulatorPortStr, 10);
+
+before(async () => {
+  const rules = fs.readFileSync("./firestore.rules", "utf8");
+  testEnv = await initializeTestEnvironment({
+    projectId: PROJECT_ID,
+    firestore: {
+      rules,
+      host: emulatorHost,
+      port: emulatorPort,
+    },
+  });
+});
+
+after(async () => {
+  if (testEnv) await testEnv.cleanup();
+});
+
+beforeEach(async () => {
+  if (testEnv) await testEnv.clearFirestore();
+});
+
+test("Unauthenticated user cannot read or write any collection", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  await assertFails(unauthDb.collection("menu_items").get());
+  await assertFails(unauthDb.collection("orders").get());
+  await assertFails(unauthDb.collection("users").doc(CUSTOMER_A).get());
+});
+
+test("Menu manager: Customer cannot mutate menu; SuperAdmin can CRUD menu", async () => {
+  const custDb = testEnv.authenticatedContext(CUSTOMER_A, { email: "cust@gmail.com", email_verified: true }).firestore();
+  const superDb = testEnv.authenticatedContext(SUPER_ADMIN_UID, { email: SUPER_ADMIN_EMAIL, email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+
+  const validMenuPayload = {
+    name: "Zinger Burger",
+    description: "Crispy thigh fillet with spicy mayo",
+    category: "SIGNATURE BURGERS",
+    pricePkr: 650,
+    imageKey: "zinger_burger",
+    badgeText: "BESTSELLER",
+    available: true,
+    sortOrder: 1,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await assertFails(custDb.collection("menu_items").doc("zinger_1").set(validMenuPayload));
+  await assertSucceeds(superDb.collection("menu_items").doc("zinger_1").set(validMenuPayload));
+  await assertSucceeds(custDb.collection("menu_items").get());
+  await assertSucceeds(superDb.collection("menu_items").doc("zinger_1").update({ pricePkr: 690, updatedAt: new Date(Date.now() - 1000) }));
+  await assertFails(custDb.collection("menu_items").doc("zinger_1").delete());
+  await assertSucceeds(superDb.collection("menu_items").doc("zinger_1").delete());
+});
+
+test("User profile isolation and privilege escalation guard", async () => {
+  const custDb = testEnv.authenticatedContext(CUSTOMER_A, { email: "cust@gmail.com", email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+
+  // Cannot self-assign SuperAdmin or BranchAdmin
+  await assertFails(
+    custDb.collection("users").doc(CUSTOMER_A).set({
+      userId: CUSTOMER_A,
+      email: "cust@gmail.com",
+      displayName: "Customer A",
+      role: "SuperAdmin",
+      assignedBranchId: "",
+      favoriteItemIds: [],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Valid Customer profile succeeds
+  await assertSucceeds(
+    custDb.collection("users").doc(CUSTOMER_A).set({
+      userId: CUSTOMER_A,
+      email: "cust@gmail.com",
+      displayName: "Customer A",
+      role: "Customer",
+      assignedBranchId: "",
+      favoriteItemIds: ["zinger_1"],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Cannot escalate role on update
+  await assertFails(
+    custDb.collection("users").doc(CUSTOMER_A).update({
+      role: "BranchAdmin",
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+});
+
+test("Spoofed unverified SuperAdmin email is denied", async () => {
+  const spoofDb = testEnv.authenticatedContext("spoof_uid", { email: SUPER_ADMIN_EMAIL, email_verified: false }).firestore();
+  const now = new Date(Date.now() - 2000);
+  await assertFails(
+    spoofDb.collection("menu_items").doc("zinger_1").set({
+      name: "Fake",
+      description: "Spoof",
+      category: "EVERYDAY VALUE",
+      pricePkr: 100,
+      imageKey: "zinger_burger",
+      badgeText: "",
+      available: true,
+      sortOrder: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+});
+
+test("Order isolation, guest checkout payload, and BranchAdmin scoping", async () => {
+  const custADb = testEnv.authenticatedContext(CUSTOMER_A, { email: "custA@gmail.com", email_verified: true }).firestore();
+  const custBDb = testEnv.authenticatedContext(CUSTOMER_B, { email: "custB@gmail.com", email_verified: true }).firestore();
+  const branchMgrDb = testEnv.authenticatedContext(BRANCH_MGR_UID, { email: BRANCH_1_EMAIL, email_verified: true }).firestore();
+  const superDb = testEnv.authenticatedContext(SUPER_ADMIN_UID, { email: SUPER_ADMIN_EMAIL, email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+
+  const orderPayload = {
+    userId: CUSTOMER_A,
+    guestSessionId: "guest_a1b2c3d4",
+    guestCheckout: true,
+    customerName: "Ali Guest",
+    customerEmail: "custA@gmail.com",
+    customerPhone: "03001234567",
+    orderType: "DELIVERY",
+    deliveryAddress: "14-B Gulberg III, Lahore",
+    branchId: "branch_1",
+    branchName: "Lahori Cafe Gulberg",
+    branchAdminEmails: [BRANCH_1_EMAIL],
+    items: [{ itemId: "zinger_1", name: "Zinger Burger", quantity: 2, unitPricePkr: 650, lineTotalPkr: 1300 }],
+    itemsSummary: "2x Zinger Burger",
+    promoCode: "LAHORI20",
+    discountPkr: 260,
+    subtotalPkr: 1300,
+    deliveryFeePkr: 150,
+    totalPkr: 1190,
+    status: "Confirmed",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await assertSucceeds(custADb.collection("orders").doc("order_1").set(orderPayload));
+  await assertSucceeds(custADb.collection("orders").where("userId", "==", CUSTOMER_A).get());
+  await assertFails(custADb.collection("orders").get()); // unfiltered list denied
+  await assertFails(custBDb.collection("orders").doc("order_1").get());
+  await assertFails(custADb.collection("orders").doc("order_1").update({ status: "Delivered", updatedAt: new Date(Date.now() - 1000) }));
+
+  // BranchAdmin can query assigned branch orders and update status
+  await assertSucceeds(branchMgrDb.collection("orders").where("branchAdminEmails", "array-contains", BRANCH_1_EMAIL).where("branchId", "==", "branch_1").get());
+  await assertSucceeds(branchMgrDb.collection("orders").doc("order_1").update({ status: "Preparing", updatedAt: new Date(Date.now() - 1000) }));
+
+  // SuperAdmin can list all orders across branches
+  await assertSucceeds(superDb.collection("orders").get());
+});
+
+test("Promotions: SuperAdmin can CRUD promos; Customer can only read promos", async () => {
+  const custDb = testEnv.authenticatedContext(CUSTOMER_A, { email: "cust@gmail.com", email_verified: true }).firestore();
+  const superDb = testEnv.authenticatedContext(SUPER_ADMIN_UID, { email: SUPER_ADMIN_EMAIL, email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+
+  const promoPayload = {
+    code: "LAHORI20",
+    discountType: "PERCENT",
+    discountValue: 20,
+    minOrderPkr: 500,
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await assertFails(custDb.collection("promotions").doc("lahori20").set(promoPayload));
+  await assertSucceeds(superDb.collection("promotions").doc("lahori20").set(promoPayload));
+  await assertSucceeds(custDb.collection("promotions").where("code", "==", "LAHORI20").get());
+  await assertFails(custDb.collection("promotions").doc("lahori20").delete());
+  await assertSucceeds(superDb.collection("promotions").doc("lahori20").delete());
+});
+
+test("Reviews: Customer can review only own Delivered order; cross-user access denied", async () => {
+  const custADb = testEnv.authenticatedContext(CUSTOMER_A, { email: "custA@gmail.com", email_verified: true }).firestore();
+  const custBDb = testEnv.authenticatedContext(CUSTOMER_B, { email: "custB@gmail.com", email_verified: true }).firestore();
+  const superDb = testEnv.authenticatedContext(SUPER_ADMIN_UID, { email: SUPER_ADMIN_EMAIL, email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+
+  const orderPayload = {
+    userId: CUSTOMER_A,
+    guestSessionId: "",
+    guestCheckout: false,
+    customerName: "Ali",
+    customerEmail: "custA@gmail.com",
+    customerPhone: "03001234567",
+    orderType: "DELIVERY",
+    deliveryAddress: "14-B Gulberg III, Lahore",
+    branchId: "branch_1",
+    branchName: "Lahori Cafe Gulberg",
+    branchAdminEmails: [],
+    items: [{ itemId: "zinger_1", name: "Zinger Burger", quantity: 1, unitPricePkr: 650, lineTotalPkr: 650 }],
+    itemsSummary: "1x Zinger Burger",
+    promoCode: "",
+    discountPkr: 0,
+    subtotalPkr: 650,
+    deliveryFeePkr: 150,
+    totalPkr: 800,
+    status: "Confirmed",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await assertSucceeds(custADb.collection("orders").doc("order_rev_1").set(orderPayload));
+
+  const reviewPayload = {
+    orderId: "order_rev_1",
+    userId: CUSTOMER_A,
+    customerName: "Ali",
+    branchId: "branch_1",
+    branchName: "Lahori Cafe Gulberg",
+    rating: 5,
+    comment: "Crispy and hot!",
+    itemsSummary: "1x Zinger Burger",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Denied while order is still Confirmed
+  await assertFails(custADb.collection("reviews").doc("order_rev_1").set(reviewPayload));
+
+  // Mark order Delivered
+  await assertSucceeds(superDb.collection("orders").doc("order_rev_1").update({ status: "Delivered", updatedAt: new Date(Date.now() - 1000) }));
+
+  // Customer A can submit review; Customer B cannot read or overwrite it
+  await assertSucceeds(custADb.collection("reviews").doc("order_rev_1").set(reviewPayload));
+  await assertSucceeds(custADb.collection("reviews").where("userId", "==", CUSTOMER_A).get());
+  await assertFails(custBDb.collection("reviews").doc("order_rev_1").get());
+  await assertFails(custBDb.collection("reviews").get());
+  await assertSucceeds(superDb.collection("reviews").get());
+});

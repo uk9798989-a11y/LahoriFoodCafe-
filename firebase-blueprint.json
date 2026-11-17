@@ -1,0 +1,158 @@
+{
+  "entities": {
+    "MenuItem": {
+      "title": "MenuItem",
+      "description": "Fast-food menu item available at Lahori Food Cafe.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Display name of the food item." },
+        "description": { "type": "string", "description": "Short marketing description." },
+        "category": { "type": "string", "description": "Menu category pill." },
+        "pricePkr": { "type": "integer", "description": "Unit price in PKR." },
+        "imageKey": { "type": "string", "description": "Visual key for menu item card artwork." },
+        "badgeText": { "type": "string", "description": "Optional badge label such as BESTSELLER or SPICY." },
+        "available": { "type": "boolean", "description": "Whether item is currently available." },
+        "sortOrder": { "type": "integer", "description": "Ordering priority in menu grid." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["name", "description", "category", "pricePkr", "imageKey", "badgeText", "available", "sortOrder", "createdAt", "updatedAt"]
+    },
+    "Promotion": {
+      "title": "Promotion",
+      "description": "Promo code supporting percentage or flat PKR discount.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "Uppercase promo code string." },
+        "discountType": { "type": "string", "enum": ["PERCENT", "FLAT"], "description": "Discount calculation type." },
+        "discountValue": { "type": "integer", "description": "Percentage (1-90) or flat PKR value." },
+        "minOrderPkr": { "type": "integer", "description": "Minimum subtotal in PKR required to apply." },
+        "active": { "type": "boolean", "description": "Whether promotion is currently active." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["code", "discountType", "discountValue", "minOrderPkr", "active", "createdAt", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated customer or staff profile with favorites and RBAC role.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID." },
+        "email": { "type": "string", "description": "Google account email." },
+        "displayName": { "type": "string", "description": "Customer display name." },
+        "role": { "type": "string", "enum": ["Customer", "BranchAdmin", "SuperAdmin"], "description": "RBAC role." },
+        "assignedBranchId": { "type": "string", "enum": ["", "branch_1", "branch_2"], "description": "Branch ID if BranchAdmin." },
+        "favoriteItemIds": { "type": "array", "description": "List of favorited menu item IDs." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["userId", "email", "displayName", "role", "assignedBranchId", "favoriteItemIds", "createdAt", "updatedAt"]
+    },
+    "SavedAddress": {
+      "title": "SavedAddress",
+      "description": "Customer delivery address mapped automatically to closest branchId.",
+      "type": "object",
+      "properties": {
+        "label": { "type": "string", "description": "Short label like Home or Office." },
+        "streetAddress": { "type": "string", "description": "Full street address." },
+        "area": { "type": "string", "description": "Lahore neighborhood/zone used for branch routing." },
+        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Auto-assigned closest branch ID." },
+        "branchName": { "type": "string", "description": "Auto-assigned closest branch name." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["label", "streetAddress", "area", "branchId", "branchName", "createdAt", "updatedAt"]
+    },
+    "BranchAdminEntry": {
+      "title": "BranchAdminEntry",
+      "description": "Authorized Branch Manager assignment managed by SuperAdmin.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "description": "Verified Google email of branch manager." },
+        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Assigned branch ID." },
+        "branchName": { "type": "string", "description": "Human-readable branch name." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["email", "branchId", "branchName", "createdAt", "updatedAt"]
+    },
+    "CafeOrder": {
+      "title": "CafeOrder",
+      "description": "Customer or guest order routed to a branch with live status tracking.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of placer." },
+        "guestSessionId": { "type": "string", "description": "Temporary guest identifier if checked out as guest." },
+        "guestCheckout": { "type": "boolean", "description": "True when placed via Guest Checkout flow." },
+        "customerName": { "type": "string", "description": "Recipient name." },
+        "customerEmail": { "type": "string", "description": "Account email." },
+        "customerPhone": { "type": "string", "description": "Contact phone number." },
+        "orderType": { "type": "string", "enum": ["DELIVERY", "PICKUP"], "description": "Fulfillment mode." },
+        "deliveryAddress": { "type": "string", "description": "Delivery address or Pickup counter note." },
+        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Assigned branch ID." },
+        "branchName": { "type": "string", "description": "Assigned branch name." },
+        "branchAdminEmails": { "type": "array", "description": "Denormalized manager emails authorized for this branch." },
+        "items": { "type": "array", "description": "Line items ordered." },
+        "itemsSummary": { "type": "string", "description": "Formatted item summary." },
+        "promoCode": { "type": "string", "description": "Applied promo code if any." },
+        "discountPkr": { "type": "integer", "description": "Discount amount in PKR." },
+        "subtotalPkr": { "type": "integer", "description": "Order subtotal in PKR." },
+        "deliveryFeePkr": { "type": "integer", "description": "Delivery fee in PKR." },
+        "totalPkr": { "type": "integer", "description": "Total order price in PKR." },
+        "status": { "type": "string", "enum": ["Confirmed", "Preparing", "Dispatched", "Delivered"], "description": "Live order status." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["userId", "guestSessionId", "guestCheckout", "customerName", "customerEmail", "customerPhone", "orderType", "deliveryAddress", "branchId", "branchName", "branchAdminEmails", "items", "itemsSummary", "promoCode", "discountPkr", "subtotalPkr", "deliveryFeePkr", "totalPkr", "status", "createdAt", "updatedAt"]
+    },
+    "OrderReview": {
+      "title": "OrderReview",
+      "description": "Post-delivery customer rating and short comment for a delivered order.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "description": "Delivered order ID being reviewed." },
+        "userId": { "type": "string", "description": "Firebase Auth UID of reviewer." },
+        "customerName": { "type": "string", "description": "Reviewer display name." },
+        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Fulfilling branch ID." },
+        "branchName": { "type": "string", "description": "Fulfilling branch name." },
+        "rating": { "type": "integer", "description": "Star rating from 1 to 5." },
+        "comment": { "type": "string", "description": "Optional short customer comment." },
+        "itemsSummary": { "type": "string", "description": "Summary of delivered items." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["orderId", "userId", "customerName", "branchId", "branchName", "rating", "comment", "itemsSummary", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/menu_items/{itemId}": {
+      "schema": { "$ref": "#/entities/MenuItem" },
+      "description": "Real-time Lahori Food Cafe menu catalog."
+    },
+    "/promotions/{promoId}": {
+      "schema": { "$ref": "#/entities/Promotion" },
+      "description": "Promo codes for percentage or flat PKR discounts."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profiles, favorites, and RBAC metadata."
+    },
+    "/users/{userId}/addresses/{addressId}": {
+      "schema": { "$ref": "#/entities/SavedAddress" },
+      "description": "Customer saved delivery addresses with auto-routed branchId."
+    },
+    "/branch_admins/{adminId}": {
+      "schema": { "$ref": "#/entities/BranchAdminEntry" },
+      "description": "SuperAdmin-managed branch manager email assignments."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/CafeOrder" },
+      "description": "Customer and guest orders routed to branches."
+    },
+    "/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/OrderReview" },
+      "description": "Customer ratings and comments submitted after orders are delivered."
+    }
+  }
+}

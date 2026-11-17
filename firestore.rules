@@ -1,0 +1,338 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Bootstrapped SuperAdmin check with verified email guard (prevents email spoofing)
+    function isSuperAdminToken() {
+      return isSignedIn() &&
+             request.auth.token.email_verified == true &&
+             request.auth.token.email == 'uk9798989@gmail.com';
+    }
+
+    function isSuperAdmin() {
+      return isSuperAdminToken() ||
+             (isSignedIn() &&
+              exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'SuperAdmin');
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidMenuItem(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.description is string && data.description.size() <= 300 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 40 &&
+             data.pricePkr is int && data.pricePkr > 0 && data.pricePkr <= 100000 &&
+             data.imageKey is string && data.imageKey.size() >= 1 && data.imageKey.size() <= 50 &&
+             data.badgeText is string && data.badgeText.size() <= 30 &&
+             data.available is bool &&
+             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 10000;
+    }
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.email is string && data.email.size() <= 120 &&
+             data.displayName is string && data.displayName.size() <= 80 &&
+             data.role in ['Customer', 'BranchAdmin', 'SuperAdmin'] &&
+             data.assignedBranchId in ['', 'branch_1', 'branch_2'] &&
+             data.favoriteItemIds is list && data.favoriteItemIds.size() <= 50 &&
+             (data.favoriteItemIds.size() == 0 || data.favoriteItemIds[0] is string);
+    }
+
+    function isValidSavedAddress(data) {
+      return data.label is string && data.label.size() >= 1 && data.label.size() <= 40 &&
+             data.streetAddress is string && data.streetAddress.size() >= 3 && data.streetAddress.size() <= 200 &&
+             data.area is string && data.area.size() >= 1 && data.area.size() <= 60 &&
+             data.branchId in ['branch_1', 'branch_2'] &&
+             data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80;
+    }
+
+    function isValidBranchAdmin(data) {
+      return data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+             data.branchId in ['branch_1', 'branch_2'] &&
+             data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80;
+    }
+
+    function isValidPromotion(data) {
+      return data.code is string && data.code.size() >= 2 && data.code.size() <= 30 &&
+             data.discountType in ['PERCENT', 'FLAT'] &&
+             data.discountValue is int &&
+             ((data.discountType == 'PERCENT' && data.discountValue >= 1 && data.discountValue <= 90) ||
+              (data.discountType == 'FLAT' && data.discountValue >= 1 && data.discountValue <= 100000)) &&
+             data.minOrderPkr is int && data.minOrderPkr >= 0 && data.minOrderPkr <= 1000000 &&
+             data.active is bool;
+    }
+
+    function isValidOrder(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.guestSessionId is string && data.guestSessionId.size() <= 40 &&
+             data.guestCheckout is bool &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 80 &&
+             data.customerEmail is string && data.customerEmail.size() <= 120 &&
+             data.customerPhone is string && data.customerPhone.size() <= 30 &&
+             data.orderType in ['DELIVERY', 'PICKUP'] &&
+             data.deliveryAddress is string && data.deliveryAddress.size() <= 250 &&
+             data.branchId in ['branch_1', 'branch_2'] &&
+             data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80 &&
+             data.branchAdminEmails is list && data.branchAdminEmails.size() <= 10 &&
+             (data.branchAdminEmails.size() == 0 || data.branchAdminEmails[0] is string) &&
+             data.items is list && data.items.size() >= 1 && data.items.size() <= 30 && data.items[0] is map &&
+             data.itemsSummary is string && data.itemsSummary.size() >= 1 && data.itemsSummary.size() <= 300 &&
+             data.promoCode is string && data.promoCode.size() <= 30 &&
+             data.discountPkr is int && data.discountPkr >= 0 && data.discountPkr <= 1000000 &&
+             data.subtotalPkr is int && data.subtotalPkr > 0 && data.subtotalPkr <= 1000000 &&
+             data.deliveryFeePkr is int && data.deliveryFeePkr >= 0 && data.deliveryFeePkr <= 10000 &&
+             data.totalPkr is int && data.totalPkr > 0 && data.totalPkr <= 1010000 &&
+             data.status in ['Confirmed', 'Preparing', 'Dispatched', 'Delivered'];
+    }
+
+    function isValidReview(data) {
+      return data.orderId is string && data.orderId.size() >= 1 && data.orderId.size() <= 128 &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 80 &&
+             data.branchId in ['branch_1', 'branch_2'] &&
+             data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80 &&
+             data.rating is int && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() <= 400 &&
+             data.itemsSummary is string && data.itemsSummary.size() >= 1 && data.itemsSummary.size() <= 300;
+    }
+
+    // 4. Collection Rules
+
+    // Menu Items: Readable by signed-in users, writable ONLY by SuperAdmin
+    match /menu_items/{itemId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && isValidId(itemId);
+
+      allow create: if isSuperAdmin() &&
+                       isValidId(itemId) &&
+                       incoming().keys().hasAll(['name', 'description', 'category', 'pricePkr', 'imageKey', 'badgeText', 'available', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['name', 'description', 'category', 'pricePkr', 'imageKey', 'badgeText', 'available', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidMenuItem(incoming());
+
+      allow update: if isSuperAdmin() &&
+                       isValidId(itemId) &&
+                       isValidMenuItem(incoming()) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'category', 'pricePkr', 'imageKey', 'badgeText', 'available', 'sortOrder', 'updatedAt']);
+
+      allow delete: if isSuperAdmin() && isValidId(itemId);
+    }
+
+    // Promotions: Readable by signed-in users, writable ONLY by SuperAdmin
+    match /promotions/{promoId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && isValidId(promoId);
+
+      allow create: if isSuperAdmin() &&
+                       isValidId(promoId) &&
+                       incoming().keys().hasAll(['code', 'discountType', 'discountValue', 'minOrderPkr', 'active', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['code', 'discountType', 'discountValue', 'minOrderPkr', 'active', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidPromotion(incoming());
+
+      allow update: if isSuperAdmin() &&
+                       isValidId(promoId) &&
+                       isValidPromotion(incoming()) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['code', 'discountType', 'discountValue', 'minOrderPkr', 'active', 'updatedAt']);
+
+      allow delete: if isSuperAdmin() && isValidId(promoId);
+    }
+
+    // Users & Saved Addresses (strict PII isolation)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isSuperAdmin());
+      allow list: if isSuperAdminToken();
+
+      // Prevent privilege escalation on self-registration (must be Customer unless SuperAdmin email)
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'email', 'displayName', 'role', 'assignedBranchId', 'favoriteItemIds', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'email', 'displayName', 'role', 'assignedBranchId', 'favoriteItemIds', 'createdAt', 'updatedAt']) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidUserProfile(incoming()) &&
+                       ((incoming().role == 'Customer' && incoming().assignedBranchId == '') ||
+                        (isSuperAdminToken() && incoming().role == 'SuperAdmin'));
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time && (
+                         (isOwner(userId) &&
+                          incoming().role == existing().role &&
+                          incoming().assignedBranchId == existing().assignedBranchId &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'favoriteItemIds', 'updatedAt'])) ||
+                         (isSuperAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['role', 'assignedBranchId', 'displayName', 'updatedAt']))
+                       );
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /addresses/{addressId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(addressId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(addressId) &&
+                         incoming().keys().hasAll(['label', 'streetAddress', 'area', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['label', 'streetAddress', 'area', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
+                         incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         isValidSavedAddress(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(addressId) &&
+                         isValidSavedAddress(incoming()) &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['label', 'streetAddress', 'area', 'branchId', 'branchName', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(addressId);
+      }
+    }
+
+    // Branch Admin Assignments (SuperAdmin creates; BranchAdmin can query own email)
+    match /branch_admins/{adminId} {
+      allow list: if isSignedIn() && (
+        isSuperAdminToken() ||
+        (request.auth.token.email_verified == true && resource.data.email == request.auth.token.email)
+      );
+      allow get: if isSignedIn() && isValidId(adminId) && (
+        isSuperAdmin() ||
+        (request.auth.token.email_verified == true && resource.data.email == request.auth.token.email)
+      );
+
+      allow create: if isSuperAdmin() &&
+                       isValidId(adminId) &&
+                       incoming().keys().hasAll(['email', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['email', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidBranchAdmin(incoming());
+
+      allow update: if isSuperAdmin() &&
+                       isValidId(adminId) &&
+                       isValidBranchAdmin(incoming()) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['email', 'branchId', 'branchName', 'updatedAt']);
+
+      allow delete: if isSuperAdmin() && isValidId(adminId);
+    }
+
+    // Orders (Customer owns own orders; BranchAdmin sees branch-assigned orders; SuperAdmin sees all)
+    match /orders/{orderId} {
+      allow list: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        isSuperAdminToken() ||
+        (request.auth.token.email_verified == true && request.auth.token.email in resource.data.branchAdminEmails)
+      );
+
+      allow get: if isSignedIn() && isValidId(orderId) && (
+        resource.data.userId == request.auth.uid ||
+        isSuperAdmin() ||
+        (request.auth.token.email_verified == true && request.auth.token.email in resource.data.branchAdminEmails)
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(orderId) &&
+                       incoming().keys().hasAll(['userId', 'guestSessionId', 'guestCheckout', 'customerName', 'customerEmail', 'customerPhone', 'orderType', 'deliveryAddress', 'branchId', 'branchName', 'branchAdminEmails', 'items', 'itemsSummary', 'promoCode', 'discountPkr', 'subtotalPkr', 'deliveryFeePkr', 'totalPkr', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'guestSessionId', 'guestCheckout', 'customerName', 'customerEmail', 'customerPhone', 'orderType', 'deliveryAddress', 'branchId', 'branchName', 'branchAdminEmails', 'items', 'itemsSummary', 'promoCode', 'discountPkr', 'subtotalPkr', 'deliveryFeePkr', 'totalPkr', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'Confirmed' &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidOrder(incoming());
+
+      // Status updates restricted to SuperAdmin or BranchAdmin for that branch; locked once Delivered
+      allow update: if isSignedIn() &&
+                       isValidId(orderId) &&
+                       isValidOrder(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().branchId == existing().branchId &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       (
+                         isSuperAdmin() ||
+                         (request.auth.token.email_verified == true && request.auth.token.email in existing().branchAdminEmails)
+                       ) &&
+                       (existing().status != 'Delivered' || isSuperAdmin()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+
+      allow delete: if isSuperAdmin() && isValidId(orderId);
+    }
+
+    // Reviews: Customers can submit/update reviews ONLY for their own Delivered orders; SuperAdmin can read/delete all
+    match /reviews/{reviewId} {
+      allow list: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        isSuperAdminToken()
+      );
+
+      allow get: if isSignedIn() && isValidId(reviewId) && (
+        resource.data.userId == request.auth.uid ||
+        isSuperAdmin()
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(reviewId) &&
+                       incoming().keys().hasAll(['orderId', 'userId', 'customerName', 'branchId', 'branchName', 'rating', 'comment', 'itemsSummary', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['orderId', 'userId', 'customerName', 'branchId', 'branchName', 'rating', 'comment', 'itemsSummary', 'createdAt', 'updatedAt']) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().orderId == reviewId &&
+                       exists(/databases/$(database)/documents/orders/$(reviewId)) &&
+                       get(/databases/$(database)/documents/orders/$(reviewId)).data.userId == request.auth.uid &&
+                       get(/databases/$(database)/documents/orders/$(reviewId)).data.status == 'Delivered' &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidReview(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(reviewId) &&
+                       existing().userId == request.auth.uid &&
+                       isValidReview(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().orderId == existing().orderId &&
+                       incoming().branchId == existing().branchId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'comment', 'updatedAt']);
+
+      allow delete: if isSuperAdmin() && isValidId(reviewId);
+    }
+  }
+}
