@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Lahori Cafe"
+rootProject.name = "Lahori Food Cafe"
 
 include(":app")

@@ -61,7 +61,17 @@ fun AuthWelcomeScreen(
                 painter = painterResource(id = R.drawable.img_lahori_logo),
                 contentDescription = "Lahori Food Cafe Logo",
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.size(180.dp)
+                modifier = Modifier.size(164.dp)
+            )
+
+            Text(
+                text = "LAHORI FOOD CAFE",
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontSize = 26.sp,
+                    letterSpacing = 1.sp
+                ),
+                color = LahoriRed,
+                textAlign = TextAlign.Center
             )
 
             Surface(
@@ -78,13 +88,13 @@ fun AuthWelcomeScreen(
 
             Text(
                 text = "LAHORE'S BOLDEST CRUNCH, DELIVERED HOT",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center
             )
 
             Text(
-                text = "Order Zinger Burgers, Thick-crust Extreme Pizza, Hot Wings & Signature Sandwiches with instant branch routing.",
+                text = "Order Pastas, Extreme & Crown Crust Pizzas, Zinger Burgers, Wraps, Fries, Fried Chicken & Value Deals.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center

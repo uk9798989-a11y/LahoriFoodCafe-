@@ -21,8 +21,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -74,6 +76,7 @@ import com.example.model.CafeOrder
 import com.example.model.MenuItem
 import com.example.model.OrderReview
 import com.example.model.OrderStatus
+import com.example.model.OrderType
 import com.example.model.Promotion
 import com.example.model.SeedMenuData
 import com.example.model.UiState
@@ -744,12 +747,18 @@ private fun AdminOrderControlCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                val isPickup = order.orderType.equals(OrderType.PICKUP.name, ignoreCase = true)
                 OrderStatus.entries.forEach { st ->
                     val active = st == currentStatus
+                    val chipLabel = when (st) {
+                        OrderStatus.Dispatched -> if (isPickup) "Ready for Pickup" else st.name
+                        OrderStatus.Delivered -> if (isPickup) "Picked Up" else st.name
+                        else -> st.name
+                    }
                     FilterChip(
                         selected = active,
                         onClick = { if (!active) onChangeStatus(st) },
-                        label = { Text(st.name, fontSize = 11.sp) },
+                        label = { Text(chipLabel, fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = when (st) {
                                 OrderStatus.Confirmed -> LahoriRed
@@ -785,15 +794,27 @@ private fun MenuEditorDialog(
 ) {
     var name by remember { mutableStateOf(initialItem?.name ?: "") }
     var description by remember { mutableStateOf(initialItem?.description ?: "") }
-    var category by remember { mutableStateOf(initialItem?.category ?: "SIGNATURE BURGERS") }
-    var priceStr by remember { mutableStateOf(initialItem?.pricePkr?.toString() ?: "650") }
+    var category by remember { mutableStateOf(initialItem?.category ?: "BURGERS") }
+    var priceStr by remember { mutableStateOf(initialItem?.pricePkr?.toString() ?: "450") }
     var imageKey by remember { mutableStateOf(initialItem?.imageKey ?: "zinger_burger") }
     var badgeText by remember { mutableStateOf(initialItem?.badgeText ?: "NEW") }
     var available by remember { mutableStateOf(initialItem?.available ?: true) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     val categories = SeedMenuData.categories.filter { it != "ALL" }
-    val imageKeys = listOf("zinger_burger", "extreme_pizza", "hot_wings", "signature_sandwich", "pickled_crunch", "everyday_value")
+    val imageKeys = listOf(
+        "pasta_bowl",
+        "combo_deal",
+        "birthday_deal",
+        "zinger_burger",
+        "extreme_pizza",
+        "wrap_roll",
+        "signature_sandwich",
+        "crispy_fries",
+        "hot_wings",
+        "pickled_crunch",
+        "soft_drink"
+    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -806,7 +827,10 @@ private fun MenuEditorDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it; errorMsg = null },

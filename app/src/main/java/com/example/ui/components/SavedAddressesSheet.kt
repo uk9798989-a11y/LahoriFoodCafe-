@@ -118,7 +118,7 @@ fun SavedAddressesBottomSheet(
                         color = LahoriWhite
                     )
                     Text(
-                        text = "Auto-routed to your nearest Lahori Cafe branch",
+                        text = "Auto-routed to your nearest Lahori Food Cafe branch",
                         style = MaterialTheme.typography.bodySmall,
                         color = LahoriWhite.copy(alpha = 0.68f)
                     )

@@ -121,6 +121,24 @@ service cloud.firestore {
              data.itemsSummary is string && data.itemsSummary.size() >= 1 && data.itemsSummary.size() <= 300;
     }
 
+    function isValidFcmToken(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.token is string && data.token.size() >= 10 && data.token.size() <= 512 &&
+             data.platform == 'android' &&
+             data.appVersion is string && data.appVersion.size() >= 1 && data.appVersion.size() <= 30;
+    }
+
+    function isValidCafeFeedback(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 80 &&
+             data.customerEmail is string && data.customerEmail.size() <= 120 &&
+             data.branchId in ['branch_1', 'branch_2'] &&
+             data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80 &&
+             data.foodRating is int && data.foodRating >= 1 && data.foodRating <= 5 &&
+             data.serviceRating is int && data.serviceRating >= 1 && data.serviceRating <= 5 &&
+             data.comment is string && data.comment.size() <= 500;
+    }
+
     // 4. Collection Rules
 
     // Menu Items: Readable by signed-in users, writable ONLY by SuperAdmin
@@ -222,6 +240,30 @@ service cloud.firestore {
                          incoming().diff(existing()).affectedKeys().hasOnly(['label', 'streetAddress', 'area', 'branchId', 'branchName', 'updatedAt']);
 
         allow delete: if isOwner(userId) && isValidId(addressId);
+      }
+
+      match /fcm_tokens/{tokenId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(tokenId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(tokenId) &&
+                         incoming().keys().hasAll(['userId', 'token', 'platform', 'appVersion', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'token', 'platform', 'appVersion', 'createdAt', 'updatedAt']) &&
+                         incoming().userId == request.auth.uid &&
+                         incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         isValidFcmToken(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(tokenId) &&
+                         isValidFcmToken(incoming()) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['token', 'appVersion', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(tokenId);
       }
     }
 
@@ -333,6 +375,31 @@ service cloud.firestore {
                        incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'comment', 'updatedAt']);
 
       allow delete: if isSuperAdmin() && isValidId(reviewId);
+    }
+
+    // Account Settings Food & Service Feedback: Owner creates & reads own; SuperAdmin reads/deletes all
+    match /feedback/{feedbackId} {
+      allow list: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        isSuperAdminToken()
+      );
+
+      allow get: if isSignedIn() && isValidId(feedbackId) && (
+        resource.data.userId == request.auth.uid ||
+        isSuperAdmin()
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(feedbackId) &&
+                       incoming().keys().hasAll(['userId', 'customerName', 'customerEmail', 'branchId', 'branchName', 'foodRating', 'serviceRating', 'comment', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'customerName', 'customerEmail', 'branchId', 'branchName', 'foodRating', 'serviceRating', 'comment', 'createdAt', 'updatedAt']) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidCafeFeedback(incoming());
+
+      allow update: if false;
+      allow delete: if isSuperAdmin() && isValidId(feedbackId);
     }
   }
 }

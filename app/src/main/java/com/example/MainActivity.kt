@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
@@ -62,11 +63,13 @@ import com.example.data.authStateFlow
 import com.example.data.onGoogleSignInClicked
 import com.example.data.signOutUser
 import com.example.model.BranchDirectory
+import com.example.model.OrderStatus
 import com.example.model.OrderType
 import com.example.model.SUPER_ADMIN_EMAIL
 import com.example.model.SeedMenuData
 import com.example.model.UiState
 import com.example.model.UserRole
+import com.example.notifications.FcmOrderEventBus
 import com.example.notifications.OrderNotificationHelper
 import com.example.ui.LahoriViewModel
 import com.example.ui.PendingGuestOrder
@@ -84,6 +87,7 @@ import com.example.ui.screens.AccountScreen
 import com.example.ui.screens.AuthWelcomeScreen
 import com.example.ui.screens.BranchAdminDashboardScreen
 import com.example.ui.screens.ExploreScreen
+import com.example.ui.screens.LiveOrderTrackingScreen
 import com.example.ui.screens.MenuScreen
 import com.example.ui.screens.OrdersScreen
 import com.example.ui.screens.RewardsScreen
@@ -95,12 +99,17 @@ import com.example.ui.theme.LahoriWhite
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    private var notificationOrderIdState by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        notificationOrderIdState = intent?.getStringExtra(OrderNotificationHelper.EXTRA_TRACK_ORDER_ID)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             splashScreen.setOnExitAnimationListener { splashScreenView ->
                 splashScreenView.remove()
@@ -142,7 +151,9 @@ class MainActivity : ComponentActivity() {
                             themeScope.launch {
                                 ThemePreferences.setDarkMode(applicationContext, enabled)
                             }
-                        }
+                        },
+                        pendingNotificationOrderId = notificationOrderIdState,
+                        onConsumeNotificationOrderId = { notificationOrderIdState = null }
                     )
                     LahoriSplashOverlay(
                         onSplashFinished = { splashActive = false }
@@ -151,12 +162,23 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val orderId = intent.getStringExtra(OrderNotificationHelper.EXTRA_TRACK_ORDER_ID)
+        if (!orderId.isNullOrBlank()) {
+            notificationOrderIdState = orderId
+        }
+    }
 }
 
 @Composable
 private fun LahoriAppRoot(
     isDarkMode: Boolean,
-    onToggleDarkMode: (Boolean) -> Unit
+    onToggleDarkMode: (Boolean) -> Unit,
+    pendingNotificationOrderId: String?,
+    onConsumeNotificationOrderId: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -248,6 +270,8 @@ private fun LahoriAppRoot(
                 sessionCart = sessionCart,
                 isDarkMode = isDarkMode,
                 onToggleDarkMode = onToggleDarkMode,
+                pendingNotificationOrderId = pendingNotificationOrderId,
+                onConsumeNotificationOrderId = onConsumeNotificationOrderId,
                 onSignOut = {
                     signOutUser(credentialManager, scope) {
                         guestBrowseMode = false
@@ -367,7 +391,8 @@ private fun GuestCafeShell(
                     onOpenSuperAdminDashboard = {},
                     onOpenBranchAdminDashboard = {},
                     isDarkMode = isDarkMode,
-                    onToggleDarkMode = onToggleDarkMode
+                    onToggleDarkMode = onToggleDarkMode,
+                    defaultFeedbackBranchId = sessionState.selectedBranchId
                 )
             }
 
@@ -472,6 +497,8 @@ private fun AuthenticatedCafeShell(
     sessionCart: SessionCartController,
     isDarkMode: Boolean,
     onToggleDarkMode: (Boolean) -> Unit,
+    pendingNotificationOrderId: String?,
+    onConsumeNotificationOrderId: () -> Unit,
     onSignOut: () -> Unit
 ) {
     val context = LocalContext.current
@@ -504,6 +531,7 @@ private fun AuthenticatedCafeShell(
     val branchAdminAssignment by viewModel.branchAdminAssignment.collectAsStateWithLifecycle()
     val customerOrdersState by viewModel.customerOrdersState.collectAsStateWithLifecycle()
     val customerReviewsState by viewModel.customerReviewsState.collectAsStateWithLifecycle()
+    val customerFeedbackState by viewModel.customerFeedbackState.collectAsStateWithLifecycle()
     val branchOrdersState by viewModel.branchOrdersState.collectAsStateWithLifecycle()
     val superAdminOrdersState by viewModel.superAdminOrdersState.collectAsStateWithLifecycle()
     val allBranchAdmins by viewModel.allBranchAdmins.collectAsStateWithLifecycle()
@@ -511,6 +539,9 @@ private fun AuthenticatedCafeShell(
     val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
     val pendingSurveyOrder by viewModel.pendingSurveyOrder.collectAsStateWithLifecycle()
     val isSubmittingReview by viewModel.isSubmittingReview.collectAsStateWithLifecycle()
+    val isSubmittingFeedback by viewModel.isSubmittingFeedback.collectAsStateWithLifecycle()
+    val trackedOrderState by viewModel.trackedOrderState.collectAsStateWithLifecycle()
+    val fcmTokenRegistered by viewModel.fcmTokenRegistered.collectAsStateWithLifecycle()
     val actionError by viewModel.actionError.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
 
@@ -521,11 +552,35 @@ private fun AuthenticatedCafeShell(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         notificationsGranted = granted
+        if (granted) {
+            viewModel.syncFcmRegistrationToken()
+        }
     }
 
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationsGranted) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    LaunchedEffect(pendingNotificationOrderId) {
+        val targetOrderId = pendingNotificationOrderId
+        if (!targetOrderId.isNullOrBlank()) {
+            viewModel.startTrackingOrder(targetOrderId)
+            onConsumeNotificationOrderId()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        FcmOrderEventBus.events.collect { pushEvent ->
+            val result = snackbarHostState.showSnackbar(
+                message = "${pushEvent.title}: ${pushEvent.body}",
+                actionLabel = "TRACK",
+                withDismissAction = true
+            )
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                viewModel.startTrackingOrder(pushEvent.orderId)
+            }
         }
     }
 
@@ -539,7 +594,8 @@ private fun AuthenticatedCafeShell(
             orderId = orderId,
             status = newStatus,
             branchName = order?.branchName ?: "Lahori Food Cafe",
-            itemsSummary = order?.itemsSummary ?: "Your order"
+            itemsSummary = order?.itemsSummary ?: "Your order",
+            orderType = order?.orderType ?: OrderType.DELIVERY.name
         )
         delay(4500L)
         viewModel.dismissStatusBanner()
@@ -567,10 +623,12 @@ private fun AuthenticatedCafeShell(
     }
     val ordersList = (customerOrdersState as? UiState.Success)?.data ?: emptyList()
     val reviewsList = (customerReviewsState as? UiState.Success)?.data ?: emptyList()
+    val feedbackList = (customerFeedbackState as? UiState.Success)?.data ?: emptyList()
     val reviewsByOrderId = remember(reviewsList) { reviewsList.associateBy { it.orderId } }
-    val activeOrderCount = remember(ordersList) {
-        ordersList.count { it.status != "Delivered" }
+    val activeOrdersList = remember(ordersList) {
+        ordersList.filter { OrderStatus.fromString(it.status) != OrderStatus.Delivered }
     }
+    val activeOrderCount = activeOrdersList.size
 
     if (showSuperAdminDashboard && userEmail.equals(SUPER_ADMIN_EMAIL, ignoreCase = true)) {
         SuperAdminDashboardScreen(
@@ -604,6 +662,33 @@ private fun AuthenticatedCafeShell(
             onUpdateOrderStatus = { orderId, status -> viewModel.updateOrderStatus(orderId, status) },
             onBack = { showBranchAdminDashboard = false }
         )
+        return
+    }
+
+    trackedOrderState?.let { activeTrackedState ->
+        LiveOrderTrackingScreen(
+            trackedOrderState = activeTrackedState,
+            allActiveOrders = activeOrdersList,
+            reviewsByOrderId = reviewsByOrderId,
+            onSelectTrackedOrder = { orderId -> viewModel.startTrackingOrder(orderId) },
+            onRateOrder = { order -> viewModel.openOrderSurvey(order) },
+            onBack = { viewModel.stopTrackingOrder() }
+        )
+        pendingSurveyOrder?.let { surveyOrder ->
+            OrderReviewSurveySheet(
+                order = surveyOrder,
+                existingReview = reviewsByOrderId[surveyOrder.id],
+                isSubmitting = isSubmittingReview,
+                onSubmit = { rating, comment ->
+                    viewModel.submitOrderReview(surveyOrder, rating, comment) {
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Thank you for rating your order ($rating/5 stars)!")
+                        }
+                    }
+                },
+                onDismiss = { viewModel.dismissOrderSurvey(surveyOrder.id) }
+            )
+        }
         return
     }
 
@@ -681,7 +766,8 @@ private fun AuthenticatedCafeShell(
                     isSignedIn = true,
                     onSignInRequested = {},
                     reviewsByOrderId = reviewsByOrderId,
-                    onRateOrder = { order -> viewModel.openOrderSurvey(order) }
+                    onRateOrder = { order -> viewModel.openOrderSurvey(order) },
+                    onTrackOrder = { order -> viewModel.startTrackingOrder(order.id) }
                 )
                 CafeTab.Account -> AccountScreen(
                     isSignedIn = true,
@@ -697,13 +783,40 @@ private fun AuthenticatedCafeShell(
                         }
                     },
                     onSignInClick = {},
-                    onSignOutClick = onSignOut,
+                    onSignOutClick = {
+                        scope.launch {
+                            withContext(NonCancellable) {
+                                viewModel.unregisterDeviceFcmToken()
+                            }
+                            onSignOut()
+                        }
+                    },
                     onOpenSuperAdminDashboard = { showSuperAdminDashboard = true },
                     onOpenBranchAdminDashboard = { showBranchAdminDashboard = true },
                     reviewsByOrderId = reviewsByOrderId,
                     onRateOrder = { order -> viewModel.openOrderSurvey(order) },
                     isDarkMode = isDarkMode,
-                    onToggleDarkMode = onToggleDarkMode
+                    onToggleDarkMode = onToggleDarkMode,
+                    fcmTokenRegistered = fcmTokenRegistered,
+                    defaultFeedbackBranchId = sessionState.selectedBranchId,
+                    recentFeedback = feedbackList,
+                    isSubmittingFeedback = isSubmittingFeedback,
+                    onSubmitCafeFeedback = { branchId, foodRating, serviceRating, comment, onComplete ->
+                        viewModel.submitCafeFeedback(
+                            branchId = branchId,
+                            foodRating = foodRating,
+                            serviceRating = serviceRating,
+                            comment = comment,
+                            onSuccess = {
+                                onComplete()
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "Feedback saved! Food $foodRating/5 • Service $serviceRating/5"
+                                    )
+                                }
+                            }
+                        )
+                    }
                 )
             }
 
@@ -717,6 +830,8 @@ private fun AuthenticatedCafeShell(
                     .padding(horizontal = 16.dp, vertical = 10.dp)
             ) {
                 statusBanner?.let { (orderId, st) ->
+                    val matchingOrder = ordersList.firstOrNull { it.id == orderId }
+                    val orderTypeStr = matchingOrder?.orderType ?: OrderType.DELIVERY.name
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = LahoriBlack,
@@ -732,12 +847,12 @@ private fun AuthenticatedCafeShell(
                             Icon(Icons.Filled.NotificationsActive, contentDescription = null, tint = LahoriGold)
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "${st.notificationTitle} (#${orderId.takeLast(6).uppercase()})",
+                                    text = "${st.notificationTitleFor(orderTypeStr)} (#${orderId.takeLast(6).uppercase()})",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = LahoriWhite
                                 )
                                 Text(
-                                    text = st.notificationMessage,
+                                    text = st.notificationMessageFor(orderTypeStr),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = LahoriWhite.copy(alpha = 0.8f)
                                 )
@@ -794,13 +909,15 @@ private fun AuthenticatedCafeShell(
                     isSubmittingOrder = false
                     showBucketSheet = false
                     currentTab = CafeTab.Orders
+                    viewModel.startTrackingOrder(orderId)
                     val branch = BranchDirectory.byId(sessionState.selectedBranchId)
                     OrderNotificationHelper.notifyOrderStatus(
                         context = context,
                         orderId = orderId,
-                        status = com.example.model.OrderStatus.Confirmed,
+                        status = OrderStatus.Confirmed,
                         branchName = branch.name,
-                        itemsSummary = "Order confirmed!"
+                        itemsSummary = "Order confirmed!",
+                        orderType = sessionState.orderType.name
                     )
                 }
             },

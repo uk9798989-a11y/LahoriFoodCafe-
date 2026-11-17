@@ -184,9 +184,9 @@ fun MenuScreen(
                     MenuItemCard(
                         item = left,
                         isFavorite = favoriteIds.contains(left.id),
-                        quantityInCart = cartQuantities[left.id] ?: 0,
+                        cartQuantities = cartQuantities,
                         onToggleFavorite = { onToggleFavorite(left.id) },
-                        onAddToBucket = { onAddToBucket(left) },
+                        onAddToBucket = onAddToBucket,
                         modifier = Modifier.weight(1f)
                     )
                     if (pair.size > 1) {
@@ -194,9 +194,9 @@ fun MenuScreen(
                         MenuItemCard(
                             item = right,
                             isFavorite = favoriteIds.contains(right.id),
-                            quantityInCart = cartQuantities[right.id] ?: 0,
+                            cartQuantities = cartQuantities,
                             onToggleFavorite = { onToggleFavorite(right.id) },
-                            onAddToBucket = { onAddToBucket(right) },
+                            onAddToBucket = onAddToBucket,
                             modifier = Modifier.weight(1f)
                         )
                     } else {

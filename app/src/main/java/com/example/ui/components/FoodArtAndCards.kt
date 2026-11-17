@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,12 +26,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BakeryDining
+import androidx.compose.material.icons.filled.Cake
+import androidx.compose.material.icons.filled.DinnerDining
 import androidx.compose.material.icons.filled.Fastfood
+import androidx.compose.material.icons.filled.LocalDrink
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocalPizza
 import androidx.compose.material.icons.filled.LunchDining
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.TakeoutDining
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -42,7 +48,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,10 +62,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.MenuItem
+import com.example.model.SeedMenuData
 import com.example.ui.theme.LahoriBlack
 import com.example.ui.theme.LahoriGold
 import com.example.ui.theme.LahoriRed
@@ -75,6 +83,21 @@ fun FoodArtworkBox(
 ) {
     val (colors, icon, accentTint) = remember(imageKey) {
         when (imageKey) {
+            "pasta_bowl" -> Triple(
+                listOf(Color(0xFFFFF5DC), Color(0xFFFFCA6C), Color(0xFFE8611A)),
+                Icons.Filled.DinnerDining,
+                Color(0xFF9C3006)
+            )
+            "combo_deal" -> Triple(
+                listOf(Color(0xFFFFEFE0), Color(0xFFFF9C4A), Color(0xFFD60027)),
+                Icons.Filled.TakeoutDining,
+                Color(0xFF94001B)
+            )
+            "birthday_deal" -> Triple(
+                listOf(Color(0xFFFFEAF2), Color(0xFFFF8CB2), Color(0xFFE4002B)),
+                Icons.Filled.Cake,
+                Color(0xFF990024)
+            )
             "zinger_burger" -> Triple(
                 listOf(Color(0xFFFFF1DF), Color(0xFFFFC178), Color(0xFFFF7A3D)),
                 Icons.Filled.LunchDining,
@@ -84,6 +107,16 @@ fun FoodArtworkBox(
                 listOf(Color(0xFFFFEED9), Color(0xFFFFAE52), Color(0xFFE4002B)),
                 Icons.Filled.LocalPizza,
                 Color(0xFF9E140B)
+            )
+            "wrap_roll" -> Triple(
+                listOf(Color(0xFFFFF4DE), Color(0xFFF7B963), Color(0xFFC95E18)),
+                Icons.Filled.Fastfood,
+                Color(0xFF7D3405)
+            )
+            "crispy_fries" -> Triple(
+                listOf(Color(0xFFFFFBE0), Color(0xFFFFD84D), Color(0xFFE68A00)),
+                Icons.Filled.TakeoutDining,
+                Color(0xFFA85200)
             )
             "hot_wings" -> Triple(
                 listOf(Color(0xFFFFE5DF), Color(0xFFFF8261), Color(0xFFD60027)),
@@ -99,6 +132,11 @@ fun FoodArtworkBox(
                 listOf(Color(0xFFEBF9E0), Color(0xFFA6E07B), Color(0xFF2D8C45)),
                 Icons.Filled.Fastfood,
                 Color(0xFF145224)
+            )
+            "soft_drink" -> Triple(
+                listOf(Color(0xFFE3F5FF), Color(0xFF69C0FF), Color(0xFF0E68B8)),
+                Icons.Filled.LocalDrink,
+                Color(0xFF084278)
             )
             else -> Triple(
                 listOf(Color(0xFFFFE6EB), Color(0xFFFF889E), Color(0xFFE4002B)),
@@ -152,11 +190,31 @@ fun FoodArtworkBox(
 fun MenuItemCard(
     item: MenuItem,
     isFavorite: Boolean,
-    quantityInCart: Int,
+    cartQuantities: Map<String, Int>,
     onToggleFavorite: () -> Unit,
-    onAddToBucket: () -> Unit,
+    onAddToBucket: (MenuItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val sizeOptions = remember(item.id, item.name) { SeedMenuData.sizeOptionsFor(item) }
+    var selectedSizeIndex by remember(item.id) { mutableIntStateOf(0) }
+    val safeIndex = if (sizeOptions.isNotEmpty()) selectedSizeIndex.coerceIn(0, sizeOptions.lastIndex) else -1
+    val selectedOption = if (safeIndex >= 0) sizeOptions[safeIndex] else null
+
+    val effectivePricePkr = selectedOption?.pricePkr ?: item.pricePkr
+    val resolvedCartItem = remember(item, selectedOption) {
+        if (selectedOption != null) {
+            val suffix = selectedOption.label.lowercase().replace(" ", "_")
+            item.copy(
+                id = "${item.id}_$suffix",
+                name = "${item.name} (${selectedOption.label})",
+                pricePkr = selectedOption.pricePkr
+            )
+        } else {
+            item
+        }
+    }
+    val quantityInCart = cartQuantities[resolvedCartItem.id] ?: 0
+
     val cardInteraction = remember { MutableInteractionSource() }
     val cardPressed by cardInteraction.collectIsPressedAsState()
     val cardHovered by cardInteraction.collectIsHoveredAsState()
@@ -207,7 +265,7 @@ fun MenuItemCard(
             .clickable(
                 interactionSource = cardInteraction,
                 indication = null,
-                onClick = onAddToBucket
+                onClick = { if (item.available) onAddToBucket(resolvedCartItem) }
             )
             .testTag("menu_card_${item.id}"),
         shape = RoundedCornerShape(16.dp),
@@ -220,7 +278,7 @@ fun MenuItemCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(144.dp)
+                    .height(140.dp)
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
             ) {
                 FoodArtworkBox(
@@ -238,7 +296,7 @@ fun MenuItemCard(
                         .padding(10.dp)
                 ) {
                     Text(
-                        text = formatPkr(item.pricePkr),
+                        text = formatPkr(effectivePricePkr),
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Black
@@ -323,10 +381,45 @@ fun MenuItemCard(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                if (sizeOptions.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        sizeOptions.forEachIndexed { idx, opt ->
+                            val selected = idx == safeIndex
+                            Surface(
+                                onClick = { selectedSizeIndex = idx },
+                                shape = CircleShape,
+                                color = if (selected) LahoriRed else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                border = if (selected) null else BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(28.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = opt.label,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 10.sp,
+                                            fontWeight = if (selected) FontWeight.Black else FontWeight.Bold
+                                        ),
+                                        color = if (selected) LahoriWhite else MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
 
                 Button(
-                    onClick = onAddToBucket,
+                    onClick = { onAddToBucket(resolvedCartItem) },
                     enabled = item.available,
                     interactionSource = btnInteraction,
                     shape = RoundedCornerShape(12.dp),

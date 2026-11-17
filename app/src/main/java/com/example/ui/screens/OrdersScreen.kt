@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,14 +18,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeliveryDining
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storefront
@@ -30,9 +37,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -49,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -57,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import com.example.model.CafeOrder
 import com.example.model.OrderReview
 import com.example.model.OrderStatus
+import com.example.model.OrderType
 import com.example.model.UiState
 import com.example.ui.components.formatPkr
 import com.example.ui.theme.LahoriGold
@@ -67,6 +79,12 @@ import com.example.ui.theme.LahoriWhite
 import com.google.firebase.Timestamp
 import java.text.SimpleDateFormat
 import java.util.Locale
+
+private enum class OrderFilterTab {
+    All,
+    Active,
+    Delivered
+}
 
 fun formatOrderDate(timestamp: Timestamp?): String {
     val date = (timestamp ?: Timestamp.now()).toDate()
@@ -80,9 +98,11 @@ fun OrdersScreen(
     onSignInRequested: () -> Unit,
     reviewsByOrderId: Map<String, OrderReview> = emptyMap(),
     onRateOrder: ((CafeOrder) -> Unit)? = null,
+    onTrackOrder: ((CafeOrder) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var selectedOrder by remember { mutableStateOf<CafeOrder?>(null) }
+    var selectedFilter by remember { mutableStateOf(OrderFilterTab.All) }
 
     Column(
         modifier = modifier
@@ -142,17 +162,78 @@ fun OrdersScreen(
                 }
                 is UiState.Success -> {
                     val orders = ordersState.data
+                    val activeOrders = remember(orders) {
+                        orders.filter { OrderStatus.fromString(it.status) != OrderStatus.Delivered }
+                    }
+                    val deliveredOrders = remember(orders) {
+                        orders.filter { OrderStatus.fromString(it.status) == OrderStatus.Delivered }
+                    }
+                    val filteredOrders = remember(orders, activeOrders, deliveredOrders, selectedFilter) {
+                        when (selectedFilter) {
+                            OrderFilterTab.All -> orders
+                            OrderFilterTab.Active -> activeOrders
+                            OrderFilterTab.Delivered -> deliveredOrders
+                        }
+                    }
+
                     LazyColumn(
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 110.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         item(key = "orders_header") {
-                            Text("LIVE ORDER TRACKER", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-                            Text(
-                                text = "Real-time status updates • Tap any order for full details",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "LIVE ORDER TRACKER",
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        color = MaterialTheme.colorScheme.onBackground,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    LiveSyncBadge(isActive = activeOrders.isNotEmpty())
+                                }
+                                Text(
+                                    text = if (activeOrders.isNotEmpty()) {
+                                        "${activeOrders.size} active order(s) syncing in real time • Tap Track Live for full milestone view"
+                                    } else {
+                                        "Real-time Firestore updates • Tap any order for full receipt & timeline"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                if (orders.isNotEmpty()) {
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        val filterOptions = listOf(
+                                            OrderFilterTab.All to "All (${orders.size})",
+                                            OrderFilterTab.Active to "Active (${activeOrders.size})",
+                                            OrderFilterTab.Delivered to "Delivered (${deliveredOrders.size})"
+                                        )
+                                        items(filterOptions, key = { it.first.name }) { (tab, label) ->
+                                            FilterChip(
+                                                selected = selectedFilter == tab,
+                                                onClick = { selectedFilter = tab },
+                                                label = {
+                                                    Text(
+                                                        text = label,
+                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                                    )
+                                                },
+                                                colors = FilterChipDefaults.filterChipColors(
+                                                    selectedContainerColor = LahoriRed,
+                                                    selectedLabelColor = LahoriWhite
+                                                ),
+                                                modifier = Modifier.testTag("orders_filter_${tab.name.lowercase()}")
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         if (orders.isEmpty()) {
@@ -178,13 +259,39 @@ fun OrdersScreen(
                                     }
                                 }
                             }
+                        } else if (filteredOrders.isEmpty()) {
+                            item(key = "no_filtered_orders") {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(24.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = LahoriSuccess, modifier = Modifier.size(38.dp))
+                                        Text(
+                                            text = if (selectedFilter == OrderFilterTab.Active) "No active orders right now" else "No delivered orders yet",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        TextButton(onClick = { selectedFilter = OrderFilterTab.All }) {
+                                            Text("VIEW ALL ORDERS", color = LahoriRed)
+                                        }
+                                    }
+                                }
+                            }
                         } else {
-                            items(orders, key = { it.id }) { order ->
+                            items(filteredOrders, key = { it.id }) { order ->
                                 OrderSummaryCard(
                                     order = order,
                                     showStepper = true,
                                     existingReview = reviewsByOrderId[order.id],
                                     onRateOrder = onRateOrder?.let { cb -> { cb(order) } },
+                                    onTrackOrder = onTrackOrder?.let { cb -> { cb(order) } },
                                     onClick = { selectedOrder = order }
                                 )
                             }
@@ -205,6 +312,12 @@ fun OrdersScreen(
                     cb(order)
                 }
             },
+            onTrackLive = onTrackOrder?.let { cb ->
+                {
+                    selectedOrder = null
+                    cb(order)
+                }
+            },
             onDismiss = { selectedOrder = null }
         )
     }
@@ -217,9 +330,11 @@ fun OrderSummaryCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     existingReview: OrderReview? = null,
-    onRateOrder: (() -> Unit)? = null
+    onRateOrder: (() -> Unit)? = null,
+    onTrackOrder: (() -> Unit)? = null
 ) {
     val status = OrderStatus.fromString(order.status)
+    val isPickup = order.orderType.equals(OrderType.PICKUP.name, ignoreCase = true)
     val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val badgeColor = when (status) {
         OrderStatus.Confirmed -> if (isDark) Color(0xFFFF6B81) else LahoriRed
@@ -227,11 +342,30 @@ fun OrderSummaryCard(
         OrderStatus.Dispatched -> if (isDark) Color(0xFF60A5FA) else Color(0xFF0066CC)
         OrderStatus.Delivered -> if (isDark) Color(0xFF4ADE80) else LahoriSuccess
     }
+    val statusBadgeText = when (status) {
+        OrderStatus.Dispatched -> if (isPickup) "READY FOR PICKUP" else status.displayTitle.uppercase()
+        OrderStatus.Delivered -> if (isPickup) "PICKED UP" else status.displayTitle.uppercase()
+        else -> status.displayTitle.uppercase()
+    }
+    val targetProgress = when (status) {
+        OrderStatus.Confirmed -> 0.25f
+        OrderStatus.Preparing -> 0.52f
+        OrderStatus.Dispatched -> 0.80f
+        OrderStatus.Delivered -> 1.0f
+    }
+    val animatedProgress by animateFloatAsState(
+        targetValue = targetProgress,
+        animationSpec = tween(durationMillis = 550, easing = FastOutSlowInEasing),
+        label = "card_progress_${order.id}"
+    )
 
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = BorderStroke(
+            width = if (status != OrderStatus.Delivered && showStepper) 1.5.dp else 1.dp,
+            color = if (status != OrderStatus.Delivered && showStepper) LahoriRed.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline
+        ),
         shadowElevation = 2.dp,
         modifier = modifier
             .fillMaxWidth()
@@ -282,7 +416,7 @@ fun OrderSummaryCard(
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        text = status.displayTitle.uppercase(),
+                        text = statusBadgeText,
                         style = MaterialTheme.typography.labelSmall,
                         color = badgeColor,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
@@ -297,7 +431,17 @@ fun OrderSummaryCard(
             )
 
             if (showStepper) {
-                OrderStatusProgressBar(currentStatus = status)
+                LinearProgressIndicator(
+                    progress = { animatedProgress },
+                    color = if (status == OrderStatus.Delivered) LahoriSuccess else LahoriRed,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    strokeCap = StrokeCap.Round,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(CircleShape)
+                )
+                OrderStatusProgressBar(currentStatus = status, isPickup = isPickup)
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
@@ -323,6 +467,38 @@ fun OrderSummaryCard(
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                     color = if (isDark) Color(0xFFFF6B81) else LahoriRed
                 )
+            }
+
+            if (onTrackOrder != null && status != OrderStatus.Delivered) {
+                Button(
+                    onClick = onTrackOrder,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = LahoriRed,
+                        contentColor = LahoriWhite
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("track_live_order_${order.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MyLocation,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "TRACK LIVE PROGRESS",
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
 
             if (status == OrderStatus.Delivered && (existingReview != null || onRateOrder != null)) {
@@ -399,7 +575,10 @@ fun OrderSummaryCard(
 }
 
 @Composable
-fun OrderStatusProgressBar(currentStatus: OrderStatus) {
+fun OrderStatusProgressBar(
+    currentStatus: OrderStatus,
+    isPickup: Boolean = false
+) {
     val steps = OrderStatus.entries
     val currentIndex = steps.indexOf(currentStatus)
     Row(
@@ -436,8 +615,8 @@ fun OrderStatusProgressBar(currentStatus: OrderStatus) {
                     text = when (step) {
                         OrderStatus.Confirmed -> "Confirmed"
                         OrderStatus.Preparing -> "Preparing"
-                        OrderStatus.Dispatched -> "Out"
-                        OrderStatus.Delivered -> "Delivered"
+                        OrderStatus.Dispatched -> if (isPickup) "Ready" else "Out"
+                        OrderStatus.Delivered -> if (isPickup) "Picked Up" else "Delivered"
                     },
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                     color = if (reached) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -454,10 +633,12 @@ fun OrderDetailsBottomSheet(
     order: CafeOrder,
     onDismiss: () -> Unit,
     existingReview: OrderReview? = null,
-    onRateOrder: (() -> Unit)? = null
+    onRateOrder: (() -> Unit)? = null,
+    onTrackLive: (() -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val status = OrderStatus.fromString(order.status)
+    val isPickup = order.orderType.equals(OrderType.PICKUP.name, ignoreCase = true)
     val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
 
     ModalBottomSheet(
@@ -496,7 +677,23 @@ fun OrderDetailsBottomSheet(
                 }
             }
 
-            OrderStatusProgressBar(currentStatus = status)
+            OrderStatusProgressBar(currentStatus = status, isPickup = isPickup)
+
+            if (onTrackLive != null && status != OrderStatus.Delivered) {
+                Button(
+                    onClick = onTrackLive,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = LahoriRed, contentColor = LahoriWhite),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("details_track_live_button")
+                ) {
+                    Icon(Icons.Filled.MyLocation, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("OPEN LIVE TRACKER", style = MaterialTheme.typography.labelLarge)
+                }
+            }
 
             Surface(
                 shape = RoundedCornerShape(12.dp),

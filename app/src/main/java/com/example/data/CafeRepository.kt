@@ -1,9 +1,11 @@
 package com.example.data
 
 import android.content.Context
+import com.example.BuildConfig
 import com.example.R
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchDirectory
+import com.example.model.CafeFeedback
 import com.example.model.CafeOrder
 import com.example.model.CartItem
 import com.example.model.MenuItem
@@ -32,6 +34,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import java.security.MessageDigest
 
 class CafeRepository(
     private val db: FirebaseFirestore,
@@ -73,27 +76,60 @@ class CafeRepository(
         val path = "menu_items"
         return try {
             requireUserId()
-            val existing = db.collection(path).limit(1).get().await()
-            if (!existing.isEmpty) return Result.success(Unit)
-            val batch = db.batch()
-            SeedMenuData.initialItems.forEach { item ->
+            val existingSnap = db.collection(path).get().await()
+            val existingIds = existingSnap.documents.map { it.id }.toSet()
+            val hasNewCatalog = existingIds.any { it.startsWith("lfc_") }
+
+            val legacyToDelete = if (!hasNewCatalog) {
+                existingIds.intersect(SeedMenuData.legacyStarterIds).toList()
+            } else {
+                emptyList()
+            }
+            val missingSeedItems = SeedMenuData.initialItems.filter { item ->
+                val docId = item.id.removePrefix("seed_")
+                !existingIds.contains(docId)
+            }
+
+            if (legacyToDelete.isEmpty() && missingSeedItems.isEmpty()) {
+                return Result.success(Unit)
+            }
+
+            var batch = db.batch()
+            var opsInBatch = 0
+            suspend fun flushIfNeeded(force: Boolean = false) {
+                if ((opsInBatch >= 400) || (force && opsInBatch > 0)) {
+                    batch.commit().await()
+                    batch = db.batch()
+                    opsInBatch = 0
+                }
+            }
+
+            for (legacyId in legacyToDelete) {
+                batch.delete(db.collection(path).document(legacyId))
+                opsInBatch++
+                flushIfNeeded()
+            }
+
+            for (item in missingSeedItems) {
                 val docId = item.id.removePrefix("seed_")
                 val docRef = db.collection(path).document(docId)
                 val payload = mapOf(
-                    "name" to item.name,
-                    "description" to item.description,
-                    "category" to item.category,
+                    "name" to item.name.trim().take(80),
+                    "description" to item.description.trim().take(300),
+                    "category" to item.category.trim().take(40),
                     "pricePkr" to item.pricePkr,
-                    "imageKey" to item.imageKey,
-                    "badgeText" to item.badgeText,
+                    "imageKey" to item.imageKey.trim().take(50),
+                    "badgeText" to item.badgeText.trim().take(30),
                     "available" to item.available,
-                    "sortOrder" to item.sortOrder,
+                    "sortOrder" to item.sortOrder.coerceIn(0L, 10000L),
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 batch.set(docRef, payload)
+                opsInBatch++
+                flushIfNeeded()
             }
-            batch.commit().await()
+            flushIfNeeded(force = true)
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -259,6 +295,73 @@ class CafeRepository(
         }
     }
 
+    // 2b. Firebase Cloud Messaging Token Registration
+    suspend fun registerFcmToken(token: String): Result<Unit> {
+        val cleanToken = token.trim().take(512)
+        if (cleanToken.length < 10) {
+            return Result.failure(IllegalArgumentException("Invalid FCM registration token"))
+        }
+        val tokenId = sha256Hex(cleanToken)
+        var docPath = "users/unauthenticated/fcm_tokens/$tokenId"
+        return try {
+            val uid = requireUserId()
+            val docRef = db.collection("users").document(uid).collection("fcm_tokens").document(tokenId)
+            docPath = docRef.path
+            val appVersion = BuildConfig.VERSION_NAME.ifBlank { "1.0" }.take(30)
+            val existing = docRef.get().await()
+            if (existing.exists()) {
+                docRef.update(
+                    mapOf(
+                        "token" to cleanToken,
+                        "appVersion" to appVersion,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            } else {
+                docRef.set(
+                    mapOf(
+                        "userId" to uid,
+                        "token" to cleanToken,
+                        "platform" to "android",
+                        "appVersion" to appVersion,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun unregisterFcmToken(token: String): Result<Unit> {
+        val cleanToken = token.trim().take(512)
+        if (cleanToken.length < 10) return Result.success(Unit)
+        val tokenId = sha256Hex(cleanToken)
+        var docPath = "users/unauthenticated/fcm_tokens/$tokenId"
+        return try {
+            val uid = auth.currentUser?.uid ?: return Result.success(Unit)
+            val docRef = db.collection("users").document(uid).collection("fcm_tokens").document(tokenId)
+            docPath = docRef.path
+            docRef.delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    private fun sha256Hex(value: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
     // 3. Saved Addresses & Branch Routing
     fun observeSavedAddresses(userId: String): Flow<List<SavedAddress>> {
         val path = "users/$userId/addresses"
@@ -405,6 +508,32 @@ class CafeRepository(
     }
 
     // 5. Orders (Customer, BranchAdmin, SuperAdmin)
+    fun observeOrder(orderId: String): Flow<CafeOrder?> = flow {
+        requireUserId()
+        require(orderId.isNotBlank()) { "Order ID is required" }
+        val path = "orders/$orderId"
+        val snapshotFlow = db.collection("orders").document(orderId)
+            .snapshots()
+            .map { snapshot ->
+                if (snapshot.exists()) {
+                    snapshot.toObject(CafeOrder::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                } else {
+                    null
+                }
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.GET, path)
+                }
+                throw error
+            }
+        snapshotFlow.collect { emit(it) }
+    }
+
     fun observeCustomerOrders(userId: String): Flow<List<CafeOrder>> {
         val path = "orders"
         return db.collection(path)
@@ -841,6 +970,74 @@ class CafeRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    // 8. General Account Settings Food & Service Feedback (Firestore 'feedback' collection)
+    fun observeCustomerFeedback(userId: String): Flow<List<CafeFeedback>> {
+        val path = "feedback"
+        return db.collection(path)
+            .whereEqualTo("userId", userId)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(CafeFeedback::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser?.uid == userId) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
+    }
+
+    suspend fun submitCafeFeedback(
+        branchId: String,
+        foodRating: Int,
+        serviceRating: Int,
+        comment: String
+    ): Result<String> {
+        var docPath = "feedback"
+        return try {
+            val uid = requireUserId()
+            val user = auth.currentUser!!
+            require(foodRating in 1..5) { "Food rating must be between 1 and 5 stars" }
+            require(serviceRating in 1..5) { "Service rating must be between 1 and 5 stars" }
+
+            val cleanComment = comment.trim().take(500)
+            val cleanName = (user.displayName ?: "Lahori Customer")
+                .trim()
+                .ifBlank { "Lahori Customer" }
+                .take(80)
+            val cleanEmail = (user.email ?: "").trim().take(120)
+            val branch = BranchDirectory.byId(branchId)
+
+            val docRef = db.collection("feedback").document()
+            docPath = docRef.path
+            docRef.set(
+                mapOf(
+                    "userId" to uid,
+                    "customerName" to cleanName,
+                    "customerEmail" to cleanEmail,
+                    "branchId" to branch.id,
+                    "branchName" to branch.name,
+                    "foodRating" to foodRating.toLong(),
+                    "serviceRating" to serviceRating.toLong(),
+                    "comment" to cleanComment,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(docRef.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, docPath)
             Result.failure(e)
         }
     }

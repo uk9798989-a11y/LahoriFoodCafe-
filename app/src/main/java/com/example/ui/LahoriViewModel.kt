@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.CafeRepository
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchDirectory
+import com.example.model.CafeFeedback
 import com.example.model.CafeOrder
 import com.example.model.CartItem
 import com.example.model.MenuItem
@@ -19,7 +20,9 @@ import com.example.model.SeedMenuData
 import com.example.model.UiState
 import com.example.model.UserProfile
 import com.example.model.UserRole
+import com.google.firebase.Firebase
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.messaging.messaging
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -32,6 +35,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import java.util.UUID
 
 data class PendingGuestOrder(
@@ -185,13 +189,33 @@ class LahoriViewModel(
     private val _isSubmittingReview = MutableStateFlow(false)
     val isSubmittingReview: StateFlow<Boolean> = _isSubmittingReview.asStateFlow()
 
+    private val _isSubmittingFeedback = MutableStateFlow(false)
+    val isSubmittingFeedback: StateFlow<Boolean> = _isSubmittingFeedback.asStateFlow()
+
+    private val _trackedOrderId = MutableStateFlow<String?>(null)
+    val trackedOrderId: StateFlow<String?> = _trackedOrderId.asStateFlow()
+
+    private val _fcmTokenRegistered = MutableStateFlow(false)
+    val fcmTokenRegistered: StateFlow<Boolean> = _fcmTokenRegistered.asStateFlow()
+
+    @Volatile
+    private var currentFcmToken: String? = null
+
     private val lastSeenOrderStatuses = mutableMapOf<String, OrderStatus>()
     private val handledSurveyOrderIds = mutableSetOf<String>()
     private var initialOrderLoadComplete = false
 
     val menuState: StateFlow<UiState<List<MenuItem>>> = repository.observeMenuItems()
         .map<List<MenuItem>, UiState<List<MenuItem>>> { items ->
-            UiState.Success(items.ifEmpty { SeedMenuData.initialItems })
+            val resolved = when {
+                items.isEmpty() -> SeedMenuData.initialItems
+                items.none { it.id.startsWith("lfc_") } -> {
+                    val customItems = items.filter { it.id !in SeedMenuData.legacyStarterIds }
+                    (SeedMenuData.initialItems + customItems).sortedBy { it.sortOrder }
+                }
+                else -> items
+            }
+            UiState.Success(resolved)
         }
         .catch { error ->
             val firestoreError = unwrapFirestoreException(error)
@@ -260,6 +284,27 @@ class LahoriViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
+    @Suppress("OPT_IN_USAGE")
+    val trackedOrderState: StateFlow<UiState<CafeOrder>?> = _trackedOrderId
+        .flatMapLatest { orderId ->
+            if (orderId.isNullOrBlank()) {
+                flowOf(null)
+            } else {
+                repository.observeOrder(orderId)
+                    .map<CafeOrder?, UiState<CafeOrder>?> { order ->
+                        if (order != null) UiState.Success(order)
+                        else UiState.Error("Order #$orderId was not found.")
+                    }
+                    .catch { error ->
+                        val firestoreError = unwrapFirestoreException(error)
+                        if (firestoreError == null && error is CancellationException) throw error
+                        Log.w(TAG, "Tracked order stream error", firestoreError ?: error)
+                        emit(UiState.Error((firestoreError ?: error).message ?: "Failed to track order in real time"))
+                    }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
+
     val customerReviewsState: StateFlow<UiState<List<OrderReview>>> = repository.observeCustomerReviews(currentUserId)
         .map<List<OrderReview>, UiState<List<OrderReview>>> { UiState.Success(it) }
         .catch { error ->
@@ -267,6 +312,16 @@ class LahoriViewModel(
             if (firestoreError == null && error is CancellationException) throw error
             Log.w(TAG, "Customer reviews error", firestoreError ?: error)
             emit(UiState.Error((firestoreError ?: error).message ?: "Failed to load reviews"))
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
+
+    val customerFeedbackState: StateFlow<UiState<List<CafeFeedback>>> = repository.observeCustomerFeedback(currentUserId)
+        .map<List<CafeFeedback>, UiState<List<CafeFeedback>>> { UiState.Success(it) }
+        .catch { error ->
+            val firestoreError = unwrapFirestoreException(error)
+            if (firestoreError == null && error is CancellationException) throw error
+            Log.w(TAG, "Customer feedback error", firestoreError ?: error)
+            emit(UiState.Error((firestoreError ?: error).message ?: "Failed to load feedback"))
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
@@ -377,10 +432,14 @@ class LahoriViewModel(
                 )
                 if (res.isSuccess) {
                     sessionCart.clearCart()
+                    res.getOrNull()?.let { newOrderId ->
+                        startTrackingOrder(newOrderId)
+                    }
                 } else {
                     _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Failed to record guest order"
                 }
             }
+            syncFcmRegistrationToken()
         }
 
         // Trigger post-delivery rating survey automatically when a Delivered order has no review yet
@@ -458,8 +517,74 @@ class LahoriViewModel(
         }
     }
 
+    fun submitCafeFeedback(
+        branchId: String,
+        foodRating: Int,
+        serviceRating: Int,
+        comment: String,
+        onSuccess: () -> Unit
+    ) {
+        if (_isSubmittingFeedback.value) return
+        _isSubmittingFeedback.value = true
+        viewModelScope.launch {
+            val res = repository.submitCafeFeedback(
+                branchId = branchId,
+                foodRating = foodRating,
+                serviceRating = serviceRating,
+                comment = comment
+            )
+            _isSubmittingFeedback.value = false
+            res.onSuccess {
+                onSuccess()
+            }.onFailure { err ->
+                _actionError.value = err.localizedMessage ?: "Failed to submit feedback"
+            }
+        }
+    }
+
     fun dismissStatusBanner() {
         _statusBanner.value = null
+    }
+
+    fun startTrackingOrder(orderId: String) {
+        if (orderId.isNotBlank()) {
+            _trackedOrderId.value = orderId
+        }
+    }
+
+    fun stopTrackingOrder() {
+        _trackedOrderId.value = null
+    }
+
+    fun syncFcmRegistrationToken() {
+        viewModelScope.launch {
+            try {
+                val token = Firebase.messaging.token.await()
+                if (!token.isNullOrBlank()) {
+                    currentFcmToken = token
+                    val res = repository.registerFcmToken(token)
+                    _fcmTokenRegistered.value = res.isSuccess
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "FCM token sync skipped: ${e.message}")
+            }
+        }
+    }
+
+    suspend fun unregisterDeviceFcmToken() {
+        try {
+            val token = currentFcmToken ?: Firebase.messaging.token.await()
+            if (!token.isNullOrBlank()) {
+                repository.unregisterFcmToken(token)
+                _fcmTokenRegistered.value = false
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "FCM token cleanup skipped: ${e.message}")
+        }
     }
 
     fun clearError() {

@@ -1,5 +1,5 @@
 {
-  "name": "Lahori Cafe",
+  "name": "Lahori Food Cafe",
   "description": "Mobile-first fast food ordering app for Lahori Food Cafe with real-time menu, branch routing, and role-based admin dashboards.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

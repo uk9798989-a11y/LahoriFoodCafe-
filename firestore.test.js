@@ -256,3 +256,95 @@ test("Reviews: Customer can review only own Delivered order; cross-user access d
   await assertFails(custBDb.collection("reviews").get());
   await assertSucceeds(superDb.collection("reviews").get());
 });
+
+test("FCM tokens: owner can register/update/delete hashed token doc; cross-user and invalid writes denied", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const custADb = testEnv.authenticatedContext(CUSTOMER_A, { email: "custA@gmail.com", email_verified: true }).firestore();
+  const custBDb = testEnv.authenticatedContext(CUSTOMER_B, { email: "custB@gmail.com", email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+  const tokenId = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+  const validTokenPayload = {
+    userId: CUSTOMER_A,
+    token: "fcm_sample_token_value_1234567890abcdef",
+    platform: "android",
+    appVersion: "1.0",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Unauthenticated and cross-user access denied
+  await assertFails(unauthDb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").doc(tokenId).set(validTokenPayload));
+  await assertFails(custBDb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").doc(tokenId).set(validTokenPayload));
+
+  // Invalid platform or future timestamp denied
+  await assertFails(
+    custADb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").doc("bad_plat").set({
+      ...validTokenPayload,
+      platform: "ios",
+    })
+  );
+  await assertFails(
+    custADb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").doc("bad_time").set({
+      ...validTokenPayload,
+      updatedAt: new Date(Date.now() + 60000),
+    })
+  );
+
+  // Owner create, list, partial update, and delete succeed
+  await assertSucceeds(custADb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").doc(tokenId).set(validTokenPayload));
+  await assertSucceeds(custADb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").get());
+  await assertSucceeds(
+    custADb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").doc(tokenId).update({
+      token: "fcm_refreshed_token_value_abcdef123456",
+      appVersion: "1.0",
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+  await assertFails(custBDb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").get());
+  await assertFails(custBDb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").doc(tokenId).delete());
+  await assertSucceeds(custADb.collection("users").doc(CUSTOMER_A).collection("fcm_tokens").doc(tokenId).delete());
+});
+
+test("Feedback: Owner can submit food & service ratings and query own feedback; cross-user & invalid writes denied", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const custADb = testEnv.authenticatedContext(CUSTOMER_A, { email: "custA@gmail.com", email_verified: true }).firestore();
+  const custBDb = testEnv.authenticatedContext(CUSTOMER_B, { email: "custB@gmail.com", email_verified: true }).firestore();
+  const superDb = testEnv.authenticatedContext(SUPER_ADMIN_UID, { email: SUPER_ADMIN_EMAIL, email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+
+  const validFeedbackPayload = {
+    userId: CUSTOMER_A,
+    customerName: "Ali Customer",
+    customerEmail: "custA@gmail.com",
+    branchId: "branch_1",
+    branchName: "Lahori Food Cafe — Gulberg III",
+    foodRating: 5,
+    serviceRating: 4,
+    comment: "Crispy zinger and super polite staff!",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Unauthenticated and spoofed userId writes denied
+  await assertFails(unauthDb.collection("feedback").doc("fb_1").set(validFeedbackPayload));
+  await assertFails(custBDb.collection("feedback").doc("fb_1").set(validFeedbackPayload));
+
+  // Invalid rating bounds (0 or 6) denied
+  await assertFails(custADb.collection("feedback").doc("fb_bad_food").set({ ...validFeedbackPayload, foodRating: 0 }));
+  await assertFails(custADb.collection("feedback").doc("fb_bad_svc").set({ ...validFeedbackPayload, serviceRating: 6 }));
+
+  // Valid create succeeds; filtered owner query succeeds; cross-user read/list/delete denied
+  await assertSucceeds(custADb.collection("feedback").doc("fb_1").set(validFeedbackPayload));
+  await assertSucceeds(custADb.collection("feedback").where("userId", "==", CUSTOMER_A).get());
+  await assertFails(custADb.collection("feedback").get()); // unfiltered list denied for non-SuperAdmin
+  await assertFails(custBDb.collection("feedback").doc("fb_1").get());
+  await assertFails(custADb.collection("feedback").doc("fb_1").update({ foodRating: 1, updatedAt: new Date(Date.now() - 1000) }));
+  await assertFails(custBDb.collection("feedback").doc("fb_1").delete());
+
+  // SuperAdmin can read and delete all feedback
+  await assertSucceeds(superDb.collection("feedback").get());
+  await assertSucceeds(superDb.collection("feedback").doc("fb_1").delete());
+});
+
+

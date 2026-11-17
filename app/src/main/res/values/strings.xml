@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Lahori Cafe</string>
+    <string name="app_name">Lahori Food Cafe</string>
     <string name="tagline">CRISPY. SPICY. LAHORI.</string>
     <string name="delivery_label">DELIVERY</string>
     <string name="pickup_label">PICKUP</string>
@@ -13,4 +13,15 @@
     <string name="branch_manager_dashboard">Branch Manager Dashboard</string>
     <string name="order_history_title">Order History</string>
     <string name="error_generic">Something went wrong. Please try again.</string>
+    <string name="fcm_default_notification_channel_id" translatable="false">lahori_order_updates</string>
+    <string name="feedback_section_title">FOOD &amp; SERVICE FEEDBACK</string>
+    <string name="feedback_section_subtitle">Rate our food quality and customer service</string>
+    <string name="feedback_food_label">Food Quality</string>
+    <string name="feedback_service_label">Service &amp; Hospitality</string>
+    <string name="feedback_branch_label">Branch Visited / Ordered From</string>
+    <string name="feedback_comment_label">Comments (optional)</string>
+    <string name="feedback_comment_placeholder">Share what you loved or how we can serve you better...</string>
+    <string name="feedback_submit_cta">SUBMIT FEEDBACK</string>
+    <string name="feedback_guest_prompt">Sign in with Google to rate our food &amp; service and save your feedback.</string>
+    <string name="feedback_saved_banner">Thank you! Your food &amp; service feedback has been saved.</string>
 </resources>

@@ -182,7 +182,7 @@ fun LahoriTopHeader(
                     onValueChange = onSearchQueryChange,
                     placeholder = {
                         Text(
-                            text = "Search Zinger, Pizza, Wings...",
+                            text = "Search Pasta, Zinger, Pizza, Deals...",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     },

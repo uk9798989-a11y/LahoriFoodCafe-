@@ -123,6 +123,38 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
       },
       "required": ["orderId", "userId", "customerName", "branchId", "branchName", "rating", "comment", "itemsSummary", "createdAt", "updatedAt"]
+    },
+    "FcmTokenRecord": {
+      "title": "FcmTokenRecord",
+      "description": "Device Firebase Cloud Messaging token registered to receive real-time order status push notifications.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of device owner." },
+        "token": { "type": "string", "description": "Active FCM registration token." },
+        "platform": { "type": "string", "enum": ["android"], "description": "Client platform identifier." },
+        "appVersion": { "type": "string", "description": "Installed application version." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of token registration." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last token refresh." }
+      },
+      "required": ["userId", "token", "platform", "appVersion", "createdAt", "updatedAt"]
+    },
+    "CafeFeedback": {
+      "title": "CafeFeedback",
+      "description": "General customer feedback from account settings rating food quality and service.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of submitter." },
+        "customerName": { "type": "string", "description": "Customer display name." },
+        "customerEmail": { "type": "string", "description": "Customer Google email." },
+        "branchId": { "type": "string", "enum": ["branch_1", "branch_2"], "description": "Branch ID being rated." },
+        "branchName": { "type": "string", "description": "Branch display name." },
+        "foodRating": { "type": "integer", "description": "Food quality star rating from 1 to 5." },
+        "serviceRating": { "type": "integer", "description": "Service star rating from 1 to 5." },
+        "comment": { "type": "string", "description": "Optional feedback comment (0 to 500 characters)." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["userId", "customerName", "customerEmail", "branchId", "branchName", "foodRating", "serviceRating", "comment", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -142,6 +174,10 @@
       "schema": { "$ref": "#/entities/SavedAddress" },
       "description": "Customer saved delivery addresses with auto-routed branchId."
     },
+    "/users/{userId}/fcm_tokens/{tokenId}": {
+      "schema": { "$ref": "#/entities/FcmTokenRecord" },
+      "description": "Registered Android FCM device tokens for real-time order push notifications."
+    },
     "/branch_admins/{adminId}": {
       "schema": { "$ref": "#/entities/BranchAdminEntry" },
       "description": "SuperAdmin-managed branch manager email assignments."
@@ -153,6 +189,10 @@
     "/reviews/{reviewId}": {
       "schema": { "$ref": "#/entities/OrderReview" },
       "description": "Customer ratings and comments submitted after orders are delivered."
+    },
+    "/feedback/{feedbackId}": {
+      "schema": { "$ref": "#/entities/CafeFeedback" },
+      "description": "General customer food and service ratings submitted from Account Settings."
     }
   }
 }

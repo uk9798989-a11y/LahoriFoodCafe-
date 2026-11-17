@@ -51,11 +51,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.BranchAdminEntry
+import com.example.model.BranchDirectory
+import com.example.model.CafeFeedback
 import com.example.model.CafeOrder
 import com.example.model.OrderReview
 import com.example.model.SUPER_ADMIN_EMAIL
 import com.example.model.UiState
 import com.example.model.UserRole
+import com.example.ui.components.AccountFeedbackCard
 import com.example.ui.theme.LahoriBlack
 import com.example.ui.theme.LahoriGold
 import com.example.ui.theme.LahoriRed
@@ -80,6 +83,17 @@ fun AccountScreen(
     onRateOrder: ((CafeOrder) -> Unit)? = null,
     isDarkMode: Boolean = false,
     onToggleDarkMode: (Boolean) -> Unit = {},
+    fcmTokenRegistered: Boolean = false,
+    defaultFeedbackBranchId: String = BranchDirectory.branch1.id,
+    recentFeedback: List<CafeFeedback> = emptyList(),
+    isSubmittingFeedback: Boolean = false,
+    onSubmitCafeFeedback: (
+        branchId: String,
+        foodRating: Int,
+        serviceRating: Int,
+        comment: String,
+        onComplete: () -> Unit
+    ) -> Unit = { _, _, _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var selectedHistoryOrder by remember { mutableStateOf<CafeOrder?>(null) }
@@ -269,15 +283,18 @@ fun AccountScreen(
                         )
                         Column {
                             Text(
-                                text = "Real-Time Order Alerts",
+                                text = "Real-Time Push Order Alerts",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = if (notificationsEnabled) {
-                                    "Enabled for Confirmed, Preparing, Dispatched & Delivered"
-                                } else {
-                                    "Enable push alerts for live order status updates"
+                                text = when {
+                                    notificationsEnabled && fcmTokenRegistered ->
+                                        "FCM push active for Preparing → Ready for Pickup & Delivery"
+                                    notificationsEnabled ->
+                                        "Enabled for Confirmed, Preparing, Ready for Pickup & Delivered"
+                                    else ->
+                                        "Enable push alerts for live Ready for Pickup & Delivery updates"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -296,6 +313,18 @@ fun AccountScreen(
                     }
                 }
             }
+        }
+
+        // 2b. Food & Service Feedback Form
+        item(key = "feedback_form_card") {
+            AccountFeedbackCard(
+                isSignedIn = isSignedIn,
+                defaultBranchId = defaultFeedbackBranchId,
+                isSubmitting = isSubmittingFeedback,
+                recentFeedback = recentFeedback,
+                onSignInClick = onSignInClick,
+                onSubmitFeedback = onSubmitCafeFeedback
+            )
         }
 
         // 3. Hidden Super Admin Dashboard Button (100% invisible for non-SuperAdmin users!)
