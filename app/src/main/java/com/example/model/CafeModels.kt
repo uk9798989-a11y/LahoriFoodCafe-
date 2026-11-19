@@ -367,6 +367,8 @@ data class CafeOrder(
     val customerPhone: String = "",
     val orderType: String = OrderType.DELIVERY.name,
     val deliveryAddress: String = "",
+    val deliveryLatitude: Double = 0.0,
+    val deliveryLongitude: Double = 0.0,
     val branchId: String = BranchDirectory.branch1.id,
     val branchName: String = BranchDirectory.branch1.name,
     val branchAdminEmails: List<String> = emptyList(),
@@ -380,7 +382,28 @@ data class CafeOrder(
     val status: String = OrderStatus.Confirmed.name,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+    fun hasDeliveryLocation(): Boolean =
+        (deliveryLatitude != 0.0 || deliveryLongitude != 0.0) &&
+            deliveryLatitude in -90.0..90.0 &&
+            deliveryLongitude in -180.0..180.0
+
+    fun formattedCoordinates(): String =
+        if (hasDeliveryLocation()) {
+            String.format(java.util.Locale.US, "%.5f, %.5f", deliveryLatitude, deliveryLongitude)
+        } else {
+            ""
+        }
+
+    fun deliveryGoogleMapsUrl(): String =
+        if (hasDeliveryLocation()) {
+            "https://www.google.com/maps/search/?api=1&query=$deliveryLatitude,$deliveryLongitude"
+        } else if (deliveryAddress.isNotBlank()) {
+            "https://www.google.com/maps/search/?api=1&query=${android.net.Uri.encode(deliveryAddress)}"
+        } else {
+            ""
+        }
+}
 
 @Keep
 @IgnoreExtraProperties

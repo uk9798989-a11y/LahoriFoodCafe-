@@ -39,13 +39,17 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddBusiness
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LocalOffer
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.ReceiptLong
@@ -84,6 +88,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -91,6 +96,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.LocationHelper
 import com.example.data.MenuImageStorageHelper
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchBanner
@@ -176,7 +182,12 @@ fun SuperAdminDashboardScreen(
         onDone: (String) -> Unit
     ) -> Unit = { _, _, _, _, _, _, _, _, _, _, _, _ -> },
     onDeleteBranch: (String) -> Unit = {},
-    onSeedBranches: () -> Unit = {}
+    onSeedBranches: () -> Unit = {},
+    newOrderAlert: CafeOrder? = null,
+    onDismissNewOrderAlert: () -> Unit = {},
+    notificationsEnabled: Boolean = true,
+    liveAlertsActive: Boolean = false,
+    onRequestEnableAlerts: () -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
 
@@ -209,6 +220,11 @@ fun SuperAdminDashboardScreen(
                                 color = LahoriWhite.copy(alpha = 0.75f)
                             )
                         }
+                        AdminLiveAlertStatusPill(
+                            notificationsEnabled = notificationsEnabled,
+                            liveAlertsActive = liveAlertsActive,
+                            onClick = onRequestEnableAlerts
+                        )
                     }
 
                     ScrollableTabRow(
@@ -290,6 +306,12 @@ fun SuperAdminDashboardScreen(
                                 contentPadding = PaddingValues(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
+                                item(key = "super_new_order_alert") {
+                                    IncomingOrderAlertBanner(
+                                        incoming = newOrderAlert,
+                                        onDismiss = onDismissNewOrderAlert
+                                    )
+                                }
                                 item(key = "branch_filter_chips") {
                                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         item(key = "filter_ALL") {
@@ -1772,7 +1794,10 @@ fun BranchAdminDashboardScreen(
         onError: (String) -> Unit,
         onDone: () -> Unit
     ) -> Unit = { _, _, _, _, _, _, _, _, _, _, _, onDone -> onDone() },
-    onDeleteBranchBanner: (String) -> Unit = {}
+    onDeleteBranchBanner: (String) -> Unit = {},
+    notificationsEnabled: Boolean = true,
+    liveAlertsActive: Boolean = false,
+    onRequestEnableAlerts: () -> Unit = {}
 ) {
     val isRestrictedRootMode = onSignOut != null
     if (!isRestrictedRootMode) {
@@ -1989,58 +2014,70 @@ fun BranchAdminDashboardScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         item(key = "branch_new_order_alert") {
-                            AnimatedVisibility(visible = newOrderAlert != null) {
-                                newOrderAlert?.let { incoming ->
-                                    Surface(
-                                        shape = RoundedCornerShape(14.dp),
-                                        color = LahoriBlack,
-                                        border = BorderStroke(2.dp, LahoriGold),
-                                        shadowElevation = 6.dp,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .testTag("branch_new_order_alert_card")
+                            IncomingOrderAlertBanner(
+                                incoming = newOrderAlert,
+                                onDismiss = onDismissNewOrderAlert
+                            )
+                        }
+                        item(key = "branch_live_alert_bar") {
+                            if (!notificationsEnabled || !liveAlertsActive) {
+                                Surface(
+                                    onClick = onRequestEnableAlerts,
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = LahoriBlack,
+                                    border = BorderStroke(1.2.dp, LahoriGold),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("branch_enable_bg_alerts_btn")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(14.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.NotificationsActive,
-                                                contentDescription = null,
-                                                tint = LahoriGold,
-                                                modifier = Modifier.size(26.dp)
+                                        Icon(
+                                            imageVector = Icons.Filled.NotificationsOff,
+                                            contentDescription = null,
+                                            tint = LahoriGold,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = if (!notificationsEnabled) "ENABLE OUTSIDE-APP NOTIFICATIONS" else "START BACKGROUND ORDER ALERTS",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = LahoriGold
                                             )
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = "NEW ORDER RECEIVED • #${incoming.id.takeLast(6).uppercase()}",
-                                                    style = MaterialTheme.typography.labelLarge,
-                                                    color = LahoriGold
-                                                )
-                                                Text(
-                                                    text = "${incoming.customerName} (${incoming.orderType}) • ${formatPkr(incoming.totalPkr)}",
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                    color = LahoriWhite
-                                                )
-                                                Text(
-                                                    text = incoming.itemsSummary,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = LahoriWhite.copy(alpha = 0.85f)
-                                                )
-                                            }
-                                            IconButton(
-                                                onClick = onDismissNewOrderAlert,
-                                                modifier = Modifier.size(40.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Filled.Close,
-                                                    contentDescription = "Dismiss new order alert",
-                                                    tint = LahoriWhite
-                                                )
-                                            }
+                                            Text(
+                                                text = "Tap to receive instant order alerts with sound even when the app is closed or minimized.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = LahoriWhite.copy(alpha = 0.85f)
+                                            )
                                         }
+                                    }
+                                }
+                            } else {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = LahoriSuccess.copy(alpha = 0.12f),
+                                    border = BorderStroke(1.dp, LahoriSuccess.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.NotificationsActive,
+                                            contentDescription = null,
+                                            tint = LahoriSuccess,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Text(
+                                            text = "Background Push & Sound Alerts Active (outside app)",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = LahoriSuccess
+                                        )
                                     }
                                 }
                             }
@@ -2157,13 +2194,156 @@ fun BranchAdminDashboardScreen(
     }
 }
 
+@Composable
+private fun AdminLiveAlertStatusPill(
+    notificationsEnabled: Boolean,
+    liveAlertsActive: Boolean,
+    onClick: () -> Unit
+) {
+    val active = notificationsEnabled && liveAlertsActive
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        color = if (active) LahoriSuccess.copy(alpha = 0.22f) else LahoriRed,
+        border = BorderStroke(1.dp, if (active) LahoriSuccess else LahoriGold),
+        modifier = Modifier
+            .padding(end = 6.dp)
+            .testTag("admin_live_alerts_pill")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Icon(
+                imageVector = if (active) Icons.Filled.NotificationsActive else Icons.Filled.NotificationsOff,
+                contentDescription = null,
+                tint = if (active) LahoriGold else LahoriWhite,
+                modifier = Modifier.size(14.dp)
+            )
+            Text(
+                text = if (active) "ALERTS ON" else "ENABLE ALERTS",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                color = LahoriWhite
+            )
+        }
+    }
+}
+
+@Composable
+private fun IncomingOrderAlertBanner(
+    incoming: CafeOrder?,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    AnimatedVisibility(visible = incoming != null) {
+        incoming?.let { order ->
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = LahoriBlack,
+                border = BorderStroke(2.dp, LahoriGold),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("branch_new_order_alert_card")
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.NotificationsActive,
+                            contentDescription = null,
+                            tint = LahoriGold,
+                            modifier = Modifier.size(26.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "NEW ORDER RECEIVED • #${order.id.takeLast(6).uppercase()}",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = LahoriGold
+                            )
+                            Text(
+                                text = "${order.customerName} (${order.orderType}) • ${formatPkr(order.totalPkr)}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = LahoriWhite
+                            )
+                            Text(
+                                text = order.itemsSummary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = LahoriWhite.copy(alpha = 0.85f)
+                            )
+                            if (order.orderType.equals(OrderType.DELIVERY.name, ignoreCase = true) && order.deliveryAddress.isNotBlank()) {
+                                Text(
+                                    text = "Location: ${order.deliveryAddress}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = LahoriGold.copy(alpha = 0.9f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Dismiss new order alert",
+                                tint = LahoriWhite
+                            )
+                        }
+                    }
+
+                    if (order.orderType.equals(OrderType.DELIVERY.name, ignoreCase = true) &&
+                        (order.hasDeliveryLocation() || order.deliveryAddress.isNotBlank())
+                    ) {
+                        Button(
+                            onClick = {
+                                LocationHelper.openCustomerLocationInMaps(
+                                    context = context,
+                                    latitude = order.deliveryLatitude,
+                                    longitude = order.deliveryLongitude,
+                                    address = order.deliveryAddress,
+                                    customerName = order.customerName
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = LahoriRed, contentColor = LahoriWhite),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Filled.Map, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = if (order.hasDeliveryLocation()) "OPEN LIVE GPS LOCATION ON MAP" else "VIEW ADDRESS ON MAP",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AdminOrderControlCard(
     order: CafeOrder,
     onChangeStatus: (OrderStatus) -> Unit
 ) {
+    val context = LocalContext.current
     val currentStatus = OrderStatus.fromString(order.status)
+    val isDelivery = order.orderType.equals(OrderType.DELIVERY.name, ignoreCase = true)
+    val hasGpsPin = isDelivery && order.hasDeliveryLocation()
+
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -2182,7 +2362,7 @@ private fun AdminOrderControlCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "#${order.id.takeLast(6).uppercase()} • ${order.branchId.uppercase()}",
                         style = MaterialTheme.typography.titleMedium,
@@ -2202,7 +2382,118 @@ private fun AdminOrderControlCard(
             }
 
             Text(order.itemsSummary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-            Text(order.deliveryAddress, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            if (order.customerPhone.isNotBlank()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Phone: ${order.customerPhone}",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    TextButton(
+                        onClick = { LocationHelper.dialCustomerPhone(context, order.customerPhone) },
+                        modifier = Modifier.testTag("admin_call_customer_${order.id}")
+                    ) {
+                        Icon(Icons.Filled.Call, contentDescription = null, tint = LahoriSuccess, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("CALL", style = MaterialTheme.typography.labelMedium, color = LahoriSuccess)
+                    }
+                }
+            }
+
+            if (isDelivery) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (hasGpsPin) LahoriSuccess.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(
+                        1.dp,
+                        if (hasGpsPin) LahoriSuccess.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.LocationOn,
+                                contentDescription = null,
+                                tint = if (hasGpsPin) LahoriSuccess else LahoriRed,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = if (hasGpsPin) "CUSTOMER LIVE GPS LOCATION" else "DELIVERY ADDRESS",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = if (hasGpsPin) LahoriSuccess else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        if (order.deliveryAddress.isNotBlank()) {
+                            Text(
+                                text = order.deliveryAddress,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        if (hasGpsPin) {
+                            Text(
+                                text = "GPS Pin: ${order.formattedCoordinates()}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (hasGpsPin || order.deliveryAddress.isNotBlank()) {
+                            Button(
+                                onClick = {
+                                    LocationHelper.openCustomerLocationInMaps(
+                                        context = context,
+                                        latitude = order.deliveryLatitude,
+                                        longitude = order.deliveryLongitude,
+                                        address = order.deliveryAddress,
+                                        customerName = order.customerName
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (hasGpsPin) LahoriBlack else LahoriRed,
+                                    contentColor = LahoriWhite
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .testTag("admin_open_order_map_${order.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Map,
+                                    contentDescription = null,
+                                    tint = if (hasGpsPin) LahoriGold else LahoriWhite,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = if (hasGpsPin) "OPEN CUSTOMER LOCATION ON MAP" else "SEARCH ADDRESS ON MAP",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    text = order.deliveryAddress,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 

@@ -63,6 +63,10 @@ class LahoriFirebaseMessagingService : FirebaseMessagingService() {
         val branchId = data["branchId"].orEmpty()
         val branchName = data["branchName"].orEmpty()
         val customerName = data["customerName"].orEmpty()
+        val customerPhone = data["customerPhone"].orEmpty()
+        val deliveryAddress = data["deliveryAddress"].orEmpty()
+        val deliveryLatitude = data["deliveryLatitude"]?.toDoubleOrNull() ?: 0.0
+        val deliveryLongitude = data["deliveryLongitude"]?.toDoubleOrNull() ?: 0.0
         val totalPkr = data["totalPkr"]?.toLongOrNull() ?: 0L
         val itemsSummary = data["itemsSummary"].orEmpty()
 
@@ -99,7 +103,11 @@ class LahoriFirebaseMessagingService : FirebaseMessagingService() {
             eventType = eventType,
             branchId = branchId,
             customerName = customerName,
-            totalPkr = totalPkr
+            totalPkr = totalPkr,
+            customerPhone = customerPhone,
+            deliveryAddress = deliveryAddress,
+            deliveryLatitude = deliveryLatitude,
+            deliveryLongitude = deliveryLongitude
         )
 
         if (orderId.isNotBlank()) {

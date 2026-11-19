@@ -73,6 +73,7 @@ import com.example.model.SUPER_ADMIN_EMAIL
 import com.example.model.SeedMenuData
 import com.example.model.UiState
 import com.example.model.UserRole
+import com.example.notifications.AdminOrderMonitorService
 import com.example.notifications.FcmOrderEventBus
 import com.example.notifications.OrderNotificationHelper
 import com.example.ui.LahoriViewModel
@@ -218,6 +219,12 @@ private fun LahoriAppRoot(
         }
     }
 
+    LaunchedEffect(currentUser?.uid) {
+        if (currentUser == null) {
+            AdminOrderMonitorService.stopMonitoring(context)
+        }
+    }
+
     val user = currentUser
     if (user == null && !guestBrowseMode) {
         AuthWelcomeScreen(
@@ -316,8 +323,9 @@ private fun GuestCafeShell(
     var showPickupBranchSheet by remember { mutableStateOf(false) }
     var showBucketSheet by remember { mutableStateOf(false) }
     var isLocatingGps by remember { mutableStateOf(false) }
+    var pendingGpsKeepOrderType by remember { mutableStateOf(true) }
 
-    val triggerGpsDetection: (Boolean) -> Unit = { keepOrderType ->
+    val runGpsFetch: (Boolean) -> Unit = { keepOrderType ->
         if (!isLocatingGps) {
             isLocatingGps = true
             scope.launch {
@@ -339,11 +347,39 @@ private fun GuestCafeShell(
                     )
                     val dist = BranchDirectory.distanceToKm(nearest, loc.latitude, loc.longitude)
                     val distText = if (dist != null) " (~${String.format(Locale.US, "%.1f", dist)} km)" else ""
-                    snackbarHostState.showSnackbar("Nearest branch: ${nearest.displayShortLabel()}$distText")
+                    snackbarHostState.showSnackbar("Live GPS attached! Nearest branch: ${nearest.displayShortLabel()}$distText")
                 }.onFailure { err ->
                     snackbarHostState.showSnackbar(err.localizedMessage ?: "Could not detect GPS location")
                 }
             }
+        }
+    }
+
+    val guestLocationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val granted = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            runGpsFetch(pendingGpsKeepOrderType)
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar("Location permission denied. Please allow location or type your address.")
+            }
+        }
+    }
+
+    val triggerGpsDetection: (Boolean) -> Unit = { keepOrderType ->
+        pendingGpsKeepOrderType = keepOrderType
+        if (LocationHelper.hasLocationPermission(context)) {
+            runGpsFetch(keepOrderType)
+        } else {
+            guestLocationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
         }
     }
 
@@ -568,18 +604,16 @@ private fun GuestCafeShell(
                 }
             },
             onClearPromoCode = { sessionCart.clearPromo() },
-            onPlaceOrder = { name, phone, _ ->
-                val chosenBranch = BranchDirectory.byId(sessionState.selectedBranchId)
-                val address = if (sessionState.orderType == OrderType.DELIVERY) {
-                    sessionState.selectedAddressStreet.ifBlank { "${chosenBranch.displayShortLabel()} Delivery" }
-                } else {
-                    "Self Pickup — ${chosenBranch.shortAddress}"
-                }
+            isLocatingGps = isLocatingGps,
+            onRequestLiveLocation = { triggerGpsDetection(true) },
+            onPlaceOrder = { name, phone, deliveryAddr, deliveryLat, deliveryLng, _ ->
                 sessionCart.setPendingGuestOrder(
                     PendingGuestOrder(
                         cartItems = sessionState.cartItems,
                         orderType = sessionState.orderType,
-                        deliveryAddress = address,
+                        deliveryAddress = deliveryAddr,
+                        deliveryLatitude = deliveryLat,
+                        deliveryLongitude = deliveryLng,
                         branchId = sessionState.selectedBranchId,
                         customerName = name,
                         customerPhone = phone,
@@ -667,8 +701,10 @@ private fun AuthenticatedCafeShell(
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
 
     var isLocatingGps by remember { mutableStateOf(false) }
+    var pendingGpsKeepOrderType by remember { mutableStateOf(true) }
+    val liveAdminAlertsRunning by AdminOrderMonitorService.isRunning.collectAsStateWithLifecycle()
 
-    val triggerGpsDetection: (Boolean) -> Unit = { keepOrderType ->
+    val runGpsFetch: (Boolean) -> Unit = { keepOrderType ->
         if (!isLocatingGps) {
             isLocatingGps = true
             scope.launch {
@@ -690,11 +726,39 @@ private fun AuthenticatedCafeShell(
                     )
                     val dist = BranchDirectory.distanceToKm(nearest, loc.latitude, loc.longitude)
                     val distText = if (dist != null) " (~${String.format(Locale.US, "%.1f", dist)} km)" else ""
-                    snackbarHostState.showSnackbar("Nearest branch: ${nearest.displayShortLabel()}$distText")
+                    snackbarHostState.showSnackbar("Live GPS attached! Nearest branch: ${nearest.displayShortLabel()}$distText")
                 }.onFailure { err ->
                     snackbarHostState.showSnackbar(err.localizedMessage ?: "Could not detect GPS location")
                 }
             }
+        }
+    }
+
+    val authLocationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val granted = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            runGpsFetch(pendingGpsKeepOrderType)
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar("Location permission denied. Please allow location or type your address.")
+            }
+        }
+    }
+
+    val triggerGpsDetection: (Boolean) -> Unit = { keepOrderType ->
+        pendingGpsKeepOrderType = keepOrderType
+        if (LocationHelper.hasLocationPermission(context)) {
+            runGpsFetch(keepOrderType)
+        } else {
+            authLocationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
         }
     }
 
@@ -716,11 +780,68 @@ private fun AuthenticatedCafeShell(
         }
     }
 
-    LaunchedEffect(pendingNotificationOrderId, pendingNotificationEventType, effectiveRole) {
+    val isSuperAdminAccount =
+        (userEmail.equals(SUPER_ADMIN_EMAIL, ignoreCase = true) && isEmailVerified) ||
+            effectiveRole == UserRole.SuperAdmin
+
+    // Keep real-time background order listener active for SuperAdmin & BranchAdmin
+    LaunchedEffect(isSuperAdminAccount, branchAdminAssignment, branchAssignmentLoaded, notificationsGranted) {
+        when {
+            isSuperAdminAccount && notificationsGranted -> {
+                AdminOrderMonitorService.startMonitoring(
+                    context = context,
+                    isSuperAdmin = true,
+                    branchId = "",
+                    branchName = "All Branches"
+                )
+            }
+            !isSuperAdminAccount && branchAdminAssignment != null && notificationsGranted -> {
+                AdminOrderMonitorService.startMonitoring(
+                    context = context,
+                    isSuperAdmin = false,
+                    branchId = branchAdminAssignment!!.branchId,
+                    branchName = branchAdminAssignment!!.branchName
+                )
+            }
+            !isSuperAdminAccount && branchAssignmentLoaded && branchAdminAssignment == null -> {
+                AdminOrderMonitorService.stopMonitoring(context)
+            }
+        }
+    }
+
+    val requestOrStartAdminAlerts: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationsGranted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (isSuperAdminAccount) {
+            AdminOrderMonitorService.startMonitoring(
+                context = context,
+                isSuperAdmin = true,
+                branchId = "",
+                branchName = "All Branches"
+            )
+            scope.launch { snackbarHostState.showSnackbar("Instant background order alerts enabled for All Branches!") }
+        } else if (branchAdminAssignment != null) {
+            AdminOrderMonitorService.startMonitoring(
+                context = context,
+                isSuperAdmin = false,
+                branchId = branchAdminAssignment!!.branchId,
+                branchName = branchAdminAssignment!!.branchName
+            )
+            scope.launch { snackbarHostState.showSnackbar("Instant background order alerts enabled!") }
+        }
+    }
+
+    var showSuperAdminDashboard by remember { mutableStateOf(false) }
+    var showBranchAdminDashboard by remember { mutableStateOf(false) }
+
+    LaunchedEffect(pendingNotificationOrderId, pendingNotificationEventType, effectiveRole, isSuperAdminAccount) {
         val targetOrderId = pendingNotificationOrderId
         if (!targetOrderId.isNullOrBlank()) {
             if (pendingNotificationEventType == OrderNotificationHelper.EVENT_NEW_ORDER) {
-                snackbarHostState.showSnackbar("New branch order #${targetOrderId.takeLast(6).uppercase()} is in your queue!")
+                if (isSuperAdminAccount) {
+                    showSuperAdminDashboard = true
+                }
+                snackbarHostState.showSnackbar("New order #${targetOrderId.takeLast(6).uppercase()} is in your queue!")
             } else {
                 viewModel.startTrackingOrder(targetOrderId)
             }
@@ -758,7 +879,11 @@ private fun AuthenticatedCafeShell(
             customerName = incoming.customerName,
             totalPkr = incoming.totalPkr,
             itemsSummary = incoming.itemsSummary,
-            orderType = incoming.orderType
+            orderType = incoming.orderType,
+            customerPhone = incoming.customerPhone,
+            deliveryAddress = incoming.deliveryAddress,
+            deliveryLatitude = incoming.deliveryLatitude,
+            deliveryLongitude = incoming.deliveryLongitude
         )
     }
 
@@ -792,8 +917,6 @@ private fun AuthenticatedCafeShell(
     var showPickupBranchSheet by remember { mutableStateOf(false) }
     var showBucketSheet by remember { mutableStateOf(false) }
     var isSubmittingOrder by remember { mutableStateOf(false) }
-    var showSuperAdminDashboard by remember { mutableStateOf(false) }
-    var showBranchAdminDashboard by remember { mutableStateOf(false) }
 
     val menuItems = (menuState as? UiState.Success)?.data ?: SeedMenuData.initialItems
     val favoriteIds = remember(userProfile) { userProfile?.favoriteItemIds?.toSet() ?: emptySet() }
@@ -902,7 +1025,12 @@ private fun AuthenticatedCafeShell(
                 )
             },
             onDeletePromotion = { viewModel.deletePromotion(it) },
-            onBack = { showSuperAdminDashboard = false }
+            onBack = { showSuperAdminDashboard = false },
+            newOrderAlert = newBranchOrderAlert,
+            onDismissNewOrderAlert = { viewModel.dismissNewBranchOrderAlert() },
+            notificationsEnabled = notificationsGranted,
+            liveAlertsActive = liveAdminAlertsRunning,
+            onRequestEnableAlerts = requestOrStartAdminAlerts
         )
         return
     }
@@ -939,6 +1067,7 @@ private fun AuthenticatedCafeShell(
                 onUpdateOrderStatus = { orderId, status -> viewModel.updateOrderStatus(orderId, status) },
                 managerEmail = userEmail,
                 onSignOut = {
+                    AdminOrderMonitorService.stopMonitoring(context)
                     scope.launch {
                         withContext(NonCancellable) {
                             viewModel.unregisterDeviceFcmToken()
@@ -1004,7 +1133,10 @@ private fun AuthenticatedCafeShell(
                 onDeleteBranchBanner = { bannerId ->
                     viewModel.deleteBranchBanner(bannerId)
                     scope.launch { snackbarHostState.showSnackbar("Seasonal banner removed") }
-                }
+                },
+                notificationsEnabled = notificationsGranted,
+                liveAlertsActive = liveAdminAlertsRunning,
+                onRequestEnableAlerts = requestOrStartAdminAlerts
             )
             SnackbarHost(
                 hostState = snackbarHostState,
@@ -1066,7 +1198,10 @@ private fun AuthenticatedCafeShell(
                     onDone = onDone
                 )
             },
-            onDeleteBranchBanner = { viewModel.deleteBranchBanner(it) }
+            onDeleteBranchBanner = { viewModel.deleteBranchBanner(it) },
+            notificationsEnabled = notificationsGranted,
+            liveAlertsActive = liveAdminAlertsRunning,
+            onRequestEnableAlerts = requestOrStartAdminAlerts
         )
         return
     }
@@ -1223,6 +1358,7 @@ private fun AuthenticatedCafeShell(
                     },
                     onSignInClick = {},
                     onSignOutClick = {
+                        AdminOrderMonitorService.stopMonitoring(context)
                         scope.launch {
                             withContext(NonCancellable) {
                                 viewModel.unregisterDeviceFcmToken()
@@ -1391,23 +1527,36 @@ private fun AuthenticatedCafeShell(
             onRemoveItem = { sessionCart.decrementCartItem(it) },
             onApplyPromoCode = { code, onResult -> viewModel.validateAndApplyPromoCode(code, onResult) },
             onClearPromoCode = { sessionCart.clearPromo() },
-            onPlaceOrder = { name, phone, guestCheckout ->
+            isLocatingGps = isLocatingGps,
+            onRequestLiveLocation = { triggerGpsDetection(true) },
+            onPlaceOrder = { name, phone, deliveryAddr, deliveryLat, deliveryLng, guestCheckout ->
                 isSubmittingOrder = true
-                viewModel.submitOrder(name, phone, guestCheckout) { orderId ->
-                    isSubmittingOrder = false
-                    showBucketSheet = false
-                    currentTab = CafeTab.Orders
-                    viewModel.startTrackingOrder(orderId)
-                    val branch = BranchDirectory.byId(sessionState.selectedBranchId, branchesList)
-                    OrderNotificationHelper.notifyOrderStatus(
-                        context = context,
-                        orderId = orderId,
-                        status = OrderStatus.Confirmed,
-                        branchName = branch.name,
-                        itemsSummary = "Order confirmed!",
-                        orderType = sessionState.orderType.name
-                    )
-                }
+                viewModel.submitOrder(
+                    customerName = name,
+                    customerPhone = phone,
+                    deliveryAddressOverride = deliveryAddr,
+                    deliveryLatitude = deliveryLat,
+                    deliveryLongitude = deliveryLng,
+                    guestCheckout = guestCheckout,
+                    onError = {
+                        isSubmittingOrder = false
+                    },
+                    onSuccess = { orderId ->
+                        isSubmittingOrder = false
+                        showBucketSheet = false
+                        currentTab = CafeTab.Orders
+                        viewModel.startTrackingOrder(orderId)
+                        val branch = BranchDirectory.byId(sessionState.selectedBranchId, branchesList)
+                        OrderNotificationHelper.notifyOrderStatus(
+                            context = context,
+                            orderId = orderId,
+                            status = OrderStatus.Confirmed,
+                            branchName = branch.name,
+                            itemsSummary = "Order confirmed!",
+                            orderType = sessionState.orderType.name
+                        )
+                    }
+                )
             },
             onDismiss = { showBucketSheet = false },
             branches = branchesList,

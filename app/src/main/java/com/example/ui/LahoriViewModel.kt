@@ -49,6 +49,8 @@ data class PendingGuestOrder(
     val cartItems: List<CartItem>,
     val orderType: OrderType,
     val deliveryAddress: String,
+    val deliveryLatitude: Double = 0.0,
+    val deliveryLongitude: Double = 0.0,
     val branchId: String,
     val customerName: String,
     val customerPhone: String,
@@ -311,6 +313,9 @@ class LahoriViewModel(
     private var initialBranchOrderLoadComplete = false
     private var lastObservedBranchId: String? = null
 
+    private val seenSuperAdminOrderIds = mutableSetOf<String>()
+    private var initialSuperAdminOrderLoadComplete = false
+
     val branchesList: StateFlow<List<CafeBranch>> = repository.observeBranches()
         .map { branches -> branches.ifEmpty { BranchDirectory.defaultBranches } }
         .catch { error ->
@@ -479,10 +484,15 @@ class LahoriViewModel(
     val superAdminOrdersState: StateFlow<UiState<List<CafeOrder>>> = effectiveRole
         .flatMapLatest { role ->
             if (role != UserRole.SuperAdmin) {
+                seenSuperAdminOrderIds.clear()
+                initialSuperAdminOrderLoadComplete = false
                 flowOf(UiState.Success(emptyList()))
             } else {
                 repository.observeAllOrders()
-                    .map<List<CafeOrder>, UiState<List<CafeOrder>>> { UiState.Success(it) }
+                    .map<List<CafeOrder>, UiState<List<CafeOrder>>> { orders ->
+                        detectSuperAdminNewOrders(orders)
+                        UiState.Success(orders)
+                    }
                     .catch { error ->
                         val firestoreError = unwrapFirestoreException(error)
                         if (firestoreError == null && error is CancellationException) throw error
@@ -616,7 +626,9 @@ class LahoriViewModel(
                     guestCheckout = true,
                     guestSessionId = pending.guestSessionId,
                     promoCode = pending.promoCode,
-                    discountPkr = pending.discountPkr
+                    discountPkr = pending.discountPkr,
+                    deliveryLatitude = pending.deliveryLatitude,
+                    deliveryLongitude = pending.deliveryLongitude
                 )
                 if (res.isSuccess) {
                     sessionCart.clearCart()
@@ -716,6 +728,23 @@ class LahoriViewModel(
                 OrderStatus.fromString(it.status) == OrderStatus.Confirmed
         }
         orders.forEach { seenBranchOrderIds.add(it.id) }
+        val newest = incoming.firstOrNull()
+        if (newest != null) {
+            _newBranchOrderAlert.value = newest
+        }
+    }
+
+    private fun detectSuperAdminNewOrders(orders: List<CafeOrder>) {
+        if (!initialSuperAdminOrderLoadComplete) {
+            orders.forEach { seenSuperAdminOrderIds.add(it.id) }
+            initialSuperAdminOrderLoadComplete = true
+            return
+        }
+        val incoming = orders.filter {
+            !seenSuperAdminOrderIds.contains(it.id) &&
+                OrderStatus.fromString(it.status) == OrderStatus.Confirmed
+        }
+        orders.forEach { seenSuperAdminOrderIds.add(it.id) }
         val newest = incoming.firstOrNull()
         if (newest != null) {
             _newBranchOrderAlert.value = newest
@@ -890,15 +919,32 @@ class LahoriViewModel(
     fun submitOrder(
         customerName: String,
         customerPhone: String,
+        deliveryAddressOverride: String = "",
+        deliveryLatitude: Double = 0.0,
+        deliveryLongitude: Double = 0.0,
         guestCheckout: Boolean,
+        onError: (String) -> Unit = {},
         onSuccess: (String) -> Unit
     ) {
         val s = sessionCart.state.value
         val selectedBranch = BranchDirectory.byId(s.selectedBranchId, branchesList.value)
         val addressText = if (s.orderType == OrderType.DELIVERY) {
-            s.selectedAddressStreet.ifBlank { "${selectedBranch.displayShortLabel()} Delivery" }
+            deliveryAddressOverride.trim()
+                .ifBlank { s.selectedAddressStreet.trim() }
+                .ifBlank { s.detectedGpsAddress.trim() }
+                .ifBlank { "${selectedBranch.displayShortLabel()} Delivery" }
         } else {
             "Self Pickup — ${selectedBranch.shortAddress}"
+        }
+        val resolvedLat = if (s.orderType == OrderType.DELIVERY) {
+            if (deliveryLatitude != 0.0) deliveryLatitude else (s.deviceLatitude ?: 0.0)
+        } else {
+            0.0
+        }
+        val resolvedLng = if (s.orderType == OrderType.DELIVERY) {
+            if (deliveryLongitude != 0.0) deliveryLongitude else (s.deviceLongitude ?: 0.0)
+        } else {
+            0.0
         }
         viewModelScope.launch {
             val res = repository.placeOrder(
@@ -911,13 +957,17 @@ class LahoriViewModel(
                 guestCheckout = guestCheckout,
                 guestSessionId = s.guestSessionId,
                 promoCode = s.appliedPromoLabel,
-                discountPkr = s.appliedDiscountPkr
+                discountPkr = s.appliedDiscountPkr,
+                deliveryLatitude = resolvedLat,
+                deliveryLongitude = resolvedLng
             )
             res.onSuccess { orderId ->
                 sessionCart.clearCart()
                 onSuccess(orderId)
             }.onFailure { err ->
-                _actionError.value = err.localizedMessage ?: "Order submission failed"
+                val msg = err.localizedMessage ?: "Order submission failed"
+                _actionError.value = msg
+                onError(msg)
             }
         }
     }

@@ -21,10 +21,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.LocalMall
 import androidx.compose.material.icons.filled.LocalOffer
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.PersonOutline
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Storefront
@@ -47,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -83,16 +87,36 @@ fun BucketCheckoutSheet(
     onRemoveItem: (String) -> Unit,
     onApplyPromoCode: (code: String, onResult: (success: Boolean, message: String) -> Unit) -> Unit,
     onClearPromoCode: () -> Unit,
-    onPlaceOrder: (name: String, phone: String, guestCheckout: Boolean) -> Unit,
+    onPlaceOrder: (
+        name: String,
+        phone: String,
+        deliveryAddress: String,
+        deliveryLatitude: Double,
+        deliveryLongitude: Double,
+        guestCheckout: Boolean
+    ) -> Unit,
     onDismiss: () -> Unit,
     branches: List<CafeBranch> = BranchDirectory.defaultBranches,
-    branchPromos: List<Promotion> = emptyList()
+    branchPromos: List<Promotion> = emptyList(),
+    isLocatingGps: Boolean = false,
+    onRequestLiveLocation: () -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var customerName by remember(defaultCustomerName) {
         mutableStateOf(defaultCustomerName.ifBlank { "Lahori Guest" })
     }
     var customerPhone by remember { mutableStateOf("0300-1234567") }
+    var deliveryAddressInput by remember {
+        mutableStateOf(
+            sessionState.selectedAddressStreet.ifBlank { sessionState.detectedGpsAddress }
+        )
+    }
+    LaunchedEffect(sessionState.detectedGpsAddress, sessionState.selectedAddressStreet) {
+        val latest = sessionState.detectedGpsAddress.ifBlank { sessionState.selectedAddressStreet }
+        if (latest.isNotBlank()) {
+            deliveryAddressInput = latest
+        }
+    }
     var guestCheckoutToggle by remember(isSignedIn) { mutableStateOf(!isSignedIn) }
     var promoInput by remember { mutableStateOf(sessionState.appliedPromoLabel) }
     var promoStatusMsg by remember { mutableStateOf<String?>(null) }
@@ -199,7 +223,7 @@ fun BucketCheckoutSheet(
                             )
                             Text(
                                 text = if (sessionState.orderType == OrderType.DELIVERY) {
-                                    sessionState.selectedAddressStreet.ifBlank {
+                                    deliveryAddressInput.ifBlank {
                                         "${branch.displayShortLabel()} Delivery • ${branch.shortAddress}"
                                     }
                                 } else {
@@ -207,6 +231,116 @@ fun BucketCheckoutSheet(
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // Live GPS Location & Delivery Address Card (sent directly to Admin & Rider)
+                if (sessionState.orderType == OrderType.DELIVERY) {
+                    val hasGps = sessionState.hasGpsFix
+                    val lat = sessionState.deviceLatitude ?: 0.0
+                    val lng = sessionState.deviceLongitude ?: 0.0
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (hasGps) successText.copy(alpha = 0.09f) else MaterialTheme.colorScheme.primaryContainer,
+                        border = BorderStroke(1.2.dp, if (hasGps) successText else LahoriRed),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (hasGps) Icons.Filled.CheckCircle else Icons.Filled.LocationOn,
+                                    contentDescription = null,
+                                    tint = if (hasGps) successText else LahoriRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (hasGps) "LIVE GPS LOCATION ATTACHED" else "SEND DELIVERY LOCATION TO ADMIN",
+                                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                        color = if (hasGps) successText else LahoriRed
+                                    )
+                                    Text(
+                                        text = if (hasGps) {
+                                            "GPS Pin: ${String.format(java.util.Locale.US, "%.5f, %.5f", lat, lng)} — Admin & rider can open directly on Google Maps."
+                                        } else {
+                                            "Tap below to attach your live GPS pin so the branch admin & rider find you instantly."
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Button(
+                                onClick = {
+                                    errorText = null
+                                    onRequestLiveLocation()
+                                },
+                                enabled = !isLocatingGps && !isSubmitting,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (hasGps) LahoriBlack else LahoriRed,
+                                    contentColor = LahoriWhite
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("checkout_send_location_btn")
+                            ) {
+                                if (isLocatingGps) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        color = LahoriWhite,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("DETECTING LIVE GPS...", style = MaterialTheme.typography.labelLarge)
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.MyLocation,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = if (hasGps) LahoriGold else LahoriWhite
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = if (hasGps) "UPDATE LIVE GPS LOCATION" else "SEND MY LIVE GPS LOCATION",
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = deliveryAddressInput,
+                                onValueChange = {
+                                    deliveryAddressInput = it
+                                    errorText = null
+                                },
+                                label = { Text("House / Street / Landmark (for Rider)") },
+                                placeholder = { Text("e.g. Near Main Chowk, Street 4, House 12") },
+                                maxLines = 2,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = LahoriRed,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("checkout_delivery_address_input")
                             )
                         }
                     }
@@ -600,10 +734,36 @@ fun BucketCheckoutSheet(
 
                 Button(
                     onClick = {
-                        if (customerName.trim().isEmpty()) {
+                        val trimmedName = customerName.trim()
+                        val trimmedPhone = customerPhone.trim()
+                        val trimmedAddr = deliveryAddressInput.trim()
+                        val isDelivery = sessionState.orderType == OrderType.DELIVERY
+                        val gpsLat = if (isDelivery) (sessionState.deviceLatitude ?: 0.0) else 0.0
+                        val gpsLng = if (isDelivery) (sessionState.deviceLongitude ?: 0.0) else 0.0
+                        if (trimmedName.isEmpty()) {
                             errorText = "Please enter recipient name."
+                        } else if (isDelivery && trimmedAddr.isEmpty() && !sessionState.hasGpsFix) {
+                            errorText = "Please tap 'SEND MY LIVE GPS LOCATION' or enter your delivery address."
                         } else {
-                            onPlaceOrder(customerName.trim(), customerPhone.trim(), guestCheckoutToggle)
+                            val finalAddr = if (isDelivery) {
+                                trimmedAddr.ifBlank {
+                                    if (sessionState.hasGpsFix) {
+                                        "Live GPS Pin (${String.format(java.util.Locale.US, "%.5f, %.5f", gpsLat, gpsLng)})"
+                                    } else {
+                                        "${branch.displayShortLabel()} Delivery"
+                                    }
+                                }
+                            } else {
+                                "Self Pickup — ${branch.shortAddress}"
+                            }
+                            onPlaceOrder(
+                                trimmedName,
+                                trimmedPhone,
+                                finalAddr,
+                                gpsLat,
+                                gpsLng,
+                                guestCheckoutToggle
+                            )
                         }
                     },
                     enabled = !isSubmitting,

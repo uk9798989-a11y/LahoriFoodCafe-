@@ -1042,7 +1042,9 @@ class CafeRepository(
         guestCheckout: Boolean,
         guestSessionId: String,
         promoCode: String = "",
-        discountPkr: Long = 0L
+        discountPkr: Long = 0L,
+        deliveryLatitude: Double = 0.0,
+        deliveryLongitude: Double = 0.0
     ): Result<String> {
         var docPath = "orders"
         return try {
@@ -1054,6 +1056,13 @@ class CafeRepository(
             val cleanAddress = deliveryAddress.trim().take(250)
             val cleanPromo = promoCode.trim().uppercase().take(30)
             val branch = resolveBranch(branchId)
+
+            val hasValidCoords = orderType == OrderType.DELIVERY &&
+                (deliveryLatitude != 0.0 || deliveryLongitude != 0.0) &&
+                deliveryLatitude in -90.0..90.0 &&
+                deliveryLongitude in -180.0..180.0
+            val cleanLat = if (hasValidCoords) deliveryLatitude else 0.0
+            val cleanLng = if (hasValidCoords) deliveryLongitude else 0.0
 
             val lineItems = cartItems.take(30).map { cart ->
                 OrderLineItem(
@@ -1081,6 +1090,8 @@ class CafeRepository(
                 "customerPhone" to cleanPhone,
                 "orderType" to orderType.name,
                 "deliveryAddress" to cleanAddress,
+                "deliveryLatitude" to cleanLat,
+                "deliveryLongitude" to cleanLng,
                 "branchId" to branch.id,
                 "branchName" to branch.name,
                 "branchAdminEmails" to emptyList<String>(),

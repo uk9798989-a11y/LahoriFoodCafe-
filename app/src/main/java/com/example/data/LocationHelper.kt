@@ -201,4 +201,63 @@ object LocationHelper {
             }
         }
     }
+
+    fun openCustomerLocationInMaps(
+        context: Context,
+        latitude: Double,
+        longitude: Double,
+        address: String,
+        customerName: String = ""
+    ) {
+        val hasCoords = (latitude != 0.0 || longitude != 0.0) &&
+            latitude in -90.0..90.0 &&
+            longitude in -180.0..180.0
+
+        val geoUri = if (hasCoords) {
+            val label = Uri.encode(
+                customerName.ifBlank { "Customer Delivery" }
+            )
+            Uri.parse("geo:$latitude,$longitude?q=$latitude,$longitude($label)")
+        } else if (address.isNotBlank()) {
+            Uri.parse("geo:0,0?q=${Uri.encode(address)}")
+        } else {
+            Toast.makeText(context, "No delivery location available for this order", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val intent = Intent(Intent.ACTION_VIEW, geoUri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            try {
+                val webUri = if (hasCoords) {
+                    Uri.parse("https://www.google.com/maps/search/?api=1&query=$latitude,$longitude")
+                } else {
+                    Uri.parse("https://www.google.com/maps/search/?api=1&query=${Uri.encode(address)}")
+                }
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, webUri).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
+            } catch (_: Exception) {
+                Toast.makeText(context, "Unable to open Google Maps", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun dialCustomerPhone(context: Context, phone: String) {
+        val cleaned = phone.trim()
+        if (cleaned.isBlank()) return
+        try {
+            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(cleaned)}")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(context, "Unable to open phone dialer", Toast.LENGTH_SHORT).show()
+        }
+    }
 }

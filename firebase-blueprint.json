@@ -136,6 +136,8 @@
         "customerPhone": { "type": "string", "description": "Contact phone number." },
         "orderType": { "type": "string", "enum": ["DELIVERY", "PICKUP"], "description": "Fulfillment mode." },
         "deliveryAddress": { "type": "string", "description": "Delivery address or Pickup counter note." },
+        "deliveryLatitude": { "type": "number", "description": "Optional customer live GPS latitude attached at delivery checkout." },
+        "deliveryLongitude": { "type": "number", "description": "Optional customer live GPS longitude attached at delivery checkout." },
         "branchId": { "type": "string", "description": "Assigned dynamic branch ID." },
         "branchName": { "type": "string", "description": "Assigned branch name." },
         "branchAdminEmails": { "type": "array", "description": "Optional denormalized manager emails for reference/alerts." },

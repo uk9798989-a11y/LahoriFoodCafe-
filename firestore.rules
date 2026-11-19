@@ -152,6 +152,8 @@ service cloud.firestore {
              data.customerPhone is string && data.customerPhone.size() <= 30 &&
              data.orderType in ['DELIVERY', 'PICKUP'] &&
              data.deliveryAddress is string && data.deliveryAddress.size() <= 250 &&
+             (!('deliveryLatitude' in data) || (data.deliveryLatitude is number && data.deliveryLatitude >= -90 && data.deliveryLatitude <= 90)) &&
+             (!('deliveryLongitude' in data) || (data.deliveryLongitude is number && data.deliveryLongitude >= -180 && data.deliveryLongitude <= 180)) &&
              isValidBranchId(data.branchId) &&
              data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80 &&
              data.branchAdminEmails is list && data.branchAdminEmails.size() <= 50 &&
@@ -445,7 +447,7 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
                        isValidId(orderId) &&
                        incoming().keys().hasAll(['userId', 'guestSessionId', 'guestCheckout', 'customerName', 'customerEmail', 'customerPhone', 'orderType', 'deliveryAddress', 'branchId', 'branchName', 'branchAdminEmails', 'items', 'itemsSummary', 'promoCode', 'discountPkr', 'subtotalPkr', 'deliveryFeePkr', 'totalPkr', 'status', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['userId', 'guestSessionId', 'guestCheckout', 'customerName', 'customerEmail', 'customerPhone', 'orderType', 'deliveryAddress', 'branchId', 'branchName', 'branchAdminEmails', 'items', 'itemsSummary', 'promoCode', 'discountPkr', 'subtotalPkr', 'deliveryFeePkr', 'totalPkr', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'guestSessionId', 'guestCheckout', 'customerName', 'customerEmail', 'customerPhone', 'orderType', 'deliveryAddress', 'deliveryLatitude', 'deliveryLongitude', 'branchId', 'branchName', 'branchAdminEmails', 'items', 'itemsSummary', 'promoCode', 'discountPkr', 'subtotalPkr', 'deliveryFeePkr', 'totalPkr', 'status', 'createdAt', 'updatedAt']) &&
                        incoming().userId == request.auth.uid &&
                        incoming().status == 'Confirmed' &&
                        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&

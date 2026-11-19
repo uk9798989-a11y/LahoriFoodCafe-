@@ -221,6 +221,29 @@ test("Order isolation, guest checkout payload, and BranchAdmin scoping", async (
 
   // SuperAdmin can list all orders across branches
   await assertSucceeds(superDb.collection("orders").get());
+
+  // Delivery order with valid GPS coordinates succeeds; out-of-range GPS coordinates fail
+  await assertSucceeds(
+    custADb.collection("orders").doc("order_with_gps").set({
+      ...orderPayload,
+      deliveryLatitude: 29.1003,
+      deliveryLongitude: 70.9080,
+    })
+  );
+  await assertFails(
+    custADb.collection("orders").doc("order_bad_lat").set({
+      ...orderPayload,
+      deliveryLatitude: 120.5,
+      deliveryLongitude: 70.9080,
+    })
+  );
+  await assertFails(
+    custADb.collection("orders").doc("order_bad_lng").set({
+      ...orderPayload,
+      deliveryLatitude: 29.1003,
+      deliveryLongitude: 210.0,
+    })
+  );
 });
 
 test("Promotions: SuperAdmin can CRUD promos; Customer can only read promos", async () => {
