@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -49,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,6 +60,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -68,12 +71,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import com.example.data.MenuImageStorageHelper
 import com.example.model.MenuItem
 import com.example.model.SeedMenuData
 import com.example.ui.theme.LahoriBlack
 import com.example.ui.theme.LahoriGold
 import com.example.ui.theme.LahoriRed
 import com.example.ui.theme.LahoriWhite
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 fun formatPkr(amount: Long): String {
     val formatted = "%,d".format(amount)
@@ -89,7 +95,34 @@ fun FoodArtworkBox(
     contentDescription: String? = null,
     compact: Boolean = false
 ) {
-    val resolvedModel: Any? = previewModel ?: imageUrl.trim().takeIf { it.isNotBlank() }
+    val trimmedUrl = imageUrl.trim()
+    val isInlineCloudPhoto = previewModel == null && MenuImageStorageHelper.isDataImageUri(trimmedUrl)
+
+    if (isInlineCloudPhoto) {
+        val decodedBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = trimmedUrl) {
+            value = withContext(Dispatchers.IO) {
+                MenuImageStorageHelper.decodeDataImageBitmap(trimmedUrl)
+            }
+        }
+        val bmp = decodedBitmap
+        if (bmp != null) {
+            Image(
+                bitmap = bmp,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = modifier
+            )
+        } else {
+            DefaultFoodArtworkCanvas(
+                imageKey = imageKey,
+                compact = compact,
+                modifier = modifier
+            )
+        }
+        return
+    }
+
+    val resolvedModel: Any? = previewModel ?: trimmedUrl.takeIf { it.isNotBlank() }
     if (resolvedModel != null) {
         val context = LocalContext.current
         val request = remember(resolvedModel, context) {

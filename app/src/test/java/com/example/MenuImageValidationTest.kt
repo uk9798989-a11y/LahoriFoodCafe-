@@ -23,24 +23,27 @@ class MenuImageValidationTest {
     }
 
     @Test
-    fun isValidRemoteImageUrl_acceptsEmptyAndHttpOrHttpsUrls() {
-        assertTrue(MenuImageStorageHelper.isValidRemoteImageUrl(""))
-        assertTrue(MenuImageStorageHelper.isValidRemoteImageUrl("   "))
+    fun isValidStoredImageRef_acceptsEmptyHttpsAndCloudDataUris() {
+        assertTrue(MenuImageStorageHelper.isValidStoredImageRef(""))
+        assertTrue(MenuImageStorageHelper.isValidStoredImageRef("   "))
         assertTrue(
-            MenuImageStorageHelper.isValidRemoteImageUrl(
+            MenuImageStorageHelper.isValidStoredImageRef(
                 "https://firebasestorage.googleapis.com/v0/b/gen-lang-client-0251605363.firebasestorage.app/o/menu-items%2Fzinger%2Fphoto.jpg?alt=media"
             )
         )
-        assertTrue(MenuImageStorageHelper.isValidRemoteImageUrl("http://cdn.example.com/zinger.jpg"))
+        assertTrue(MenuImageStorageHelper.isValidStoredImageRef("http://cdn.example.com/zinger.jpg"))
+        val dataUri = "data:image/jpeg;base64," + "A".repeat(4000)
+        assertTrue(MenuImageStorageHelper.isDataImageUri(dataUri))
+        assertTrue(MenuImageStorageHelper.isValidStoredImageRef(dataUri))
     }
 
     @Test
-    fun isValidRemoteImageUrl_rejectsInvalidSchemesAndOversizedUrls() {
-        assertFalse(MenuImageStorageHelper.isValidRemoteImageUrl("not-a-url"))
-        assertFalse(MenuImageStorageHelper.isValidRemoteImageUrl("ftp://example.com/burger.jpg"))
-        assertFalse(MenuImageStorageHelper.isValidRemoteImageUrl("javascript:alert(1)"))
-        assertFalse(MenuImageStorageHelper.isValidRemoteImageUrl("file:///sdcard/photo.jpg"))
-        val oversized = "https://example.com/" + "a".repeat(1005)
-        assertFalse(MenuImageStorageHelper.isValidRemoteImageUrl(oversized))
+    fun isValidStoredImageRef_rejectsInvalidSchemesAndOversizedPayloads() {
+        assertFalse(MenuImageStorageHelper.isValidStoredImageRef("not-a-url"))
+        assertFalse(MenuImageStorageHelper.isValidStoredImageRef("ftp://example.com/burger.jpg"))
+        assertFalse(MenuImageStorageHelper.isValidStoredImageRef("javascript:alert(1)"))
+        assertFalse(MenuImageStorageHelper.isValidStoredImageRef("file:///sdcard/photo.jpg"))
+        val oversized = "data:image/jpeg;base64," + "A".repeat(MenuImageStorageHelper.MAX_STORED_IMAGE_CHARS + 50)
+        assertFalse(MenuImageStorageHelper.isValidStoredImageRef(oversized))
     }
 }

@@ -5,7 +5,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,6 +57,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -85,6 +89,8 @@ import com.example.ui.theme.LahoriSuccess
 import com.example.ui.theme.LahoriWarning
 import com.example.ui.theme.LahoriWhite
 import com.google.firebase.Timestamp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -611,7 +617,30 @@ fun BranchBannerPhotoSurface(
     contentDescription: String?,
     modifier: Modifier = Modifier
 ) {
-    val model: Any? = previewModel ?: imageUrl.trim().takeIf { it.isNotBlank() }
+    val trimmedUrl = imageUrl.trim()
+    val isInlineCloudPhoto = previewModel == null && MenuImageStorageHelper.isDataImageUri(trimmedUrl)
+
+    if (isInlineCloudPhoto) {
+        val decodedBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = trimmedUrl) {
+            value = withContext(Dispatchers.IO) {
+                MenuImageStorageHelper.decodeDataImageBitmap(trimmedUrl)
+            }
+        }
+        val bmp = decodedBitmap
+        if (bmp != null) {
+            Image(
+                bitmap = bmp,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = modifier
+            )
+        } else {
+            DefaultSeasonalBannerPlaceholder(modifier = modifier)
+        }
+        return
+    }
+
+    val model: Any? = previewModel ?: trimmedUrl.takeIf { it.isNotBlank() }
     if (model != null) {
         val context = LocalContext.current
         val req = remember(model, context) {
@@ -990,8 +1019,13 @@ private fun BranchBannerEditorDialog(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(136.dp)
+                                .height(144.dp)
                                 .clip(RoundedCornerShape(12.dp))
+                                .clickable(enabled = !isSaving) {
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                }
                                 .testTag("branch_banner_preview_box")
                         ) {
                             BranchBannerPhotoSurface(
@@ -1039,7 +1073,7 @@ private fun BranchBannerEditorDialog(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            OutlinedButton(
+                            Button(
                                 onClick = {
                                     photoPickerLauncher.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -1047,19 +1081,22 @@ private fun BranchBannerEditorDialog(
                                 },
                                 enabled = !isSaving,
                                 shape = RoundedCornerShape(10.dp),
-                                border = BorderStroke(1.dp, LahoriRed),
-                                contentPadding = PaddingValues(horizontal = 10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = LahoriRed,
+                                    contentColor = LahoriWhite
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp),
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(48.dp)
                                     .testTag("branch_banner_upload_btn")
                             ) {
-                                Icon(Icons.Filled.AddPhotoAlternate, contentDescription = null, tint = LahoriRed, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Filled.AddPhotoAlternate, contentDescription = null, tint = LahoriWhite, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text(
-                                    text = if (hasImage) "CHANGE IMAGE" else "UPLOAD IMAGE",
+                                    text = if (hasImage) "CHANGE PHOTO" else "UPLOAD PHOTO",
                                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = LahoriRed,
+                                    color = LahoriWhite,
                                     maxLines = 1
                                 )
                             }
@@ -1085,28 +1122,10 @@ private fun BranchBannerEditorDialog(
                             }
                         }
 
-                        OutlinedTextField(
-                            value = imageUrl,
-                            onValueChange = { updated ->
-                                imageUrl = updated
-                                if (updated.isNotBlank()) pickedImageUri = null
-                                errorMsg = null
-                            },
-                            enabled = !isSaving,
-                            label = { Text("Or paste Banner Image URL (https://...)") },
-                            leadingIcon = { Icon(Icons.Filled.Link, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                            trailingIcon = if (imageUrl.isNotBlank() && !isSaving) {
-                                {
-                                    IconButton(onClick = { imageUrl = ""; errorMsg = null }, modifier = Modifier.size(40.dp)) {
-                                        Icon(Icons.Filled.Close, contentDescription = "Clear URL", modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                            } else null,
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("branch_banner_url_input")
+                        Text(
+                            text = "Upload a seasonal banner photo from your gallery. It saves directly to the cloud and appears only for $branchLabel customers.",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -1204,9 +1223,7 @@ private fun BranchBannerEditorDialog(
                     val trimmedUrl = imageUrl.trim()
                     when {
                         title.trim().length < 2 -> errorMsg = "Enter a banner headline (min 2 chars)."
-                        pickedImageUri == null && trimmedUrl.length < 8 -> errorMsg = "Upload a banner photo or paste an https:// image URL."
-                        pickedImageUri == null && !MenuImageStorageHelper.isValidRemoteImageUrl(trimmedUrl) ->
-                            errorMsg = "Banner Image URL must start with https:// or http://"
+                        pickedImageUri == null && trimmedUrl.length < 8 -> errorMsg = "Please upload a banner photo from your gallery."
                         else -> {
                             errorMsg = null
                             val expiresAt = if (durationDays > 0) {

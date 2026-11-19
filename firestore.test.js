@@ -83,7 +83,7 @@ test("Menu manager: Customer cannot mutate menu; SuperAdmin can CRUD menu", asyn
   // Oversized or non-string imageUrl is rejected
   await assertFails(
     superDb.collection("menu_items").doc("zinger_1").update({
-      imageUrl: "https://example.com/" + "a".repeat(1005),
+      imageUrl: "data:image/jpeg;base64," + "a".repeat(220050),
       updatedAt: new Date(Date.now() - 200),
     })
   );
@@ -575,7 +575,7 @@ test("Branch Admin Promo & Seasonal Banner isolation: scoped strictly to assigne
     branch2MgrDb.collection("promotions").doc("branch_1_tmp15").delete()
   );
 
-  // Branch 1 Admin creates, updates seasonal banner for branch_1 -> SUCCEEDS
+  // Branch 1 Admin creates, updates seasonal banner for branch_1 (including direct cloud photo data URI) -> SUCCEEDS
   const validBanner = {
     branchId: "branch_1",
     branchName: "Lahori Food Cafe TMP",
@@ -583,7 +583,7 @@ test("Branch Admin Promo & Seasonal Banner isolation: scoped strictly to assigne
     subtitle: "Exclusive TMP hot deal with free drink!",
     promoCode: "TMP15",
     badgeText: "SEASONAL OFFER",
-    imageUrl: "https://firebasestorage.googleapis.com/v0/b/gen-lang-client-0251605363.firebasestorage.app/o/branch-banners%2Fbranch_1%2Fb1%2Fbanner.jpg?alt=media",
+    imageUrl: "data:image/jpeg;base64," + "A".repeat(4096),
     targetCategory: "EXTREME PIZZAS",
     active: true,
     expiresAt: expiresNextWeek,
@@ -592,6 +592,23 @@ test("Branch Admin Promo & Seasonal Banner isolation: scoped strictly to assigne
   };
   await assertSucceeds(branch1MgrDb.collection("branch_banners").doc("banner_tmp_1").set(validBanner));
   await assertSucceeds(branch1MgrDb.collection("branch_banners").doc("banner_tmp_1").update({ title: "Updated Winter Fest", updatedAt: new Date(Date.now() - 600) }));
+
+  // SuperAdmin saves a direct cloud photo data URI on a menu item -> SUCCEEDS
+  await assertSucceeds(
+    superDb.collection("menu_items").doc("lfc_zinger_cloud_photo").set({
+      name: "Zinger Burger",
+      description: "Crispy golden fillet",
+      category: "BURGERS",
+      pricePkr: 450,
+      imageKey: "zinger_burger",
+      imageUrl: "data:image/jpeg;base64," + "B".repeat(8192),
+      badgeText: "BESTSELLER",
+      available: true,
+      sortOrder: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
 
   // Branch 1 Admin CANNOT create banner for branch_2 or reassign branchId
   await assertFails(branch1MgrDb.collection("branch_banners").doc("banner_b2_hack").set({ ...validBanner, branchId: "branch_2" }));

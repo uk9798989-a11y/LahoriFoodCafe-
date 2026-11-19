@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -386,6 +387,10 @@ fun SuperAdminDashboardScreen(
                         items(menuItems, key = { it.id }) { item ->
                             val isCloudDoc = !item.id.startsWith("seed_")
                             Surface(
+                                onClick = {
+                                    editingMenuItem = if (isCloudDoc) item else item.copy(id = item.id.removePrefix("seed_"))
+                                    showAddMenuDialog = true
+                                },
                                 shape = RoundedCornerShape(14.dp),
                                 color = MaterialTheme.colorScheme.surface,
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -454,7 +459,7 @@ fun SuperAdminDashboardScreen(
                                     Row {
                                         IconButton(
                                             onClick = {
-                                                editingMenuItem = if (isCloudDoc) item else item.copy(id = "")
+                                                editingMenuItem = if (isCloudDoc) item else item.copy(id = item.id.removePrefix("seed_"))
                                                 showAddMenuDialog = true
                                             },
                                             modifier = Modifier
@@ -2353,12 +2358,17 @@ private fun MenuEditorDialog(
                             }
                         }
 
-                        // Live Preview Thumbnail
+                        // Live Preview Thumbnail (tappable to pick photo from gallery)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(136.dp)
+                                .height(152.dp)
                                 .clip(RoundedCornerShape(12.dp))
+                                .clickable(enabled = !isSaving) {
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                }
                                 .testTag("menu_image_preview_box")
                         ) {
                             FoodArtworkBox(
@@ -2368,6 +2378,33 @@ private fun MenuEditorDialog(
                                 contentDescription = name.ifBlank { "Menu item photo preview" },
                                 modifier = Modifier.fillMaxSize()
                             )
+                            if (!isSaving) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = LahoriBlack.copy(alpha = 0.72f),
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.AddPhotoAlternate,
+                                            contentDescription = null,
+                                            tint = LahoriGold,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = if (hasCustomImage) "Tap to change" else "Tap to upload",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            color = LahoriWhite
+                                        )
+                                    }
+                                }
+                            }
                             if (isSaving && pickedImageUri != null) {
                                 Box(
                                     modifier = Modifier
@@ -2385,7 +2422,7 @@ private fun MenuEditorDialog(
                                             modifier = Modifier.size(28.dp)
                                         )
                                         Text(
-                                            text = "Uploading photo...",
+                                            text = "Uploading to cloud...",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = LahoriWhite
                                         )
@@ -2394,12 +2431,12 @@ private fun MenuEditorDialog(
                             }
                         }
 
-                        // Gallery Pick + Remove Image buttons
+                        // Direct Gallery Upload + Remove Image buttons
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            OutlinedButton(
+                            Button(
                                 onClick = {
                                     photoPickerLauncher.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -2407,8 +2444,11 @@ private fun MenuEditorDialog(
                                 },
                                 enabled = !isSaving,
                                 shape = RoundedCornerShape(10.dp),
-                                border = BorderStroke(1.dp, LahoriRed),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = LahoriRed,
+                                    contentColor = LahoriWhite
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(48.dp)
@@ -2417,14 +2457,14 @@ private fun MenuEditorDialog(
                                 Icon(
                                     imageVector = Icons.Filled.AddPhotoAlternate,
                                     contentDescription = null,
-                                    tint = LahoriRed,
+                                    tint = LahoriWhite,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(Modifier.width(6.dp))
                                 Text(
                                     text = if (hasCustomImage) "CHANGE PHOTO" else "UPLOAD PHOTO",
                                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = LahoriRed,
+                                    color = LahoriWhite,
                                     maxLines = 1
                                 )
                             }
@@ -2461,51 +2501,8 @@ private fun MenuEditorDialog(
                             }
                         }
 
-                        // Optional direct Image URL field
-                        OutlinedTextField(
-                            value = imageUrl,
-                            onValueChange = { updated ->
-                                imageUrl = updated
-                                if (updated.isNotBlank()) {
-                                    pickedImageUri = null
-                                }
-                                errorMsg = null
-                            },
-                            enabled = !isSaving,
-                            label = { Text("Or paste Image URL (https://...)") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Filled.Link,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            },
-                            trailingIcon = if (imageUrl.isNotBlank() && !isSaving) {
-                                {
-                                    IconButton(
-                                        onClick = { imageUrl = ""; errorMsg = null },
-                                        modifier = Modifier.size(40.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Close,
-                                            contentDescription = "Clear image URL",
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                }
-                            } else null,
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Uri,
-                                imeAction = ImeAction.Next
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("menu_image_url_input")
-                        )
-
                         Text(
-                            text = "Pick from device gallery to upload to Firebase Storage, paste an HTTPS image link, or leave empty to use the Artwork Theme below.",
+                            text = "Select a photo directly from your gallery. When you tap SAVE, it uploads automatically to the cloud and appears live for all customers.",
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -2605,30 +2602,24 @@ private fun MenuEditorDialog(
                 onClick = {
                     val price = priceStr.toLongOrNull() ?: 0L
                     val trimmedUrl = imageUrl.trim()
-                    when {
-                        name.isBlank() || price <= 0L -> {
-                            errorMsg = "Enter a valid name and PKR price > 0."
-                        }
-                        pickedImageUri == null && !MenuImageStorageHelper.isValidRemoteImageUrl(trimmedUrl) -> {
-                            errorMsg = "Image URL must start with https:// or http://"
-                        }
-                        else -> {
-                            errorMsg = null
-                            onSave(
-                                initialItem?.id?.takeIf { it.isNotBlank() },
-                                name,
-                                description,
-                                category,
-                                price,
-                                imageKey,
-                                trimmedUrl,
-                                pickedImageUri,
-                                badgeText,
-                                available,
-                                initialItem?.sortOrder ?: 10L
-                            ) { saveErr ->
-                                errorMsg = saveErr
-                            }
+                    if (name.isBlank() || price <= 0L) {
+                        errorMsg = "Enter a valid name and PKR price > 0."
+                    } else {
+                        errorMsg = null
+                        onSave(
+                            initialItem?.id?.takeIf { it.isNotBlank() },
+                            name,
+                            description,
+                            category,
+                            price,
+                            imageKey,
+                            trimmedUrl,
+                            pickedImageUri,
+                            badgeText,
+                            available,
+                            initialItem?.sortOrder ?: 10L
+                        ) { saveErr ->
+                            errorMsg = saveErr
                         }
                     }
                 },

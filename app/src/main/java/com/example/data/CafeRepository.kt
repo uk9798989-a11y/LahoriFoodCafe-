@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.BuildConfig
 import com.example.R
 import com.example.model.BranchAdminEntry
+import com.example.model.BranchBanner
 import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
 import com.example.model.CafeFeedback
@@ -443,16 +444,17 @@ class CafeRepository(
             val trimmedName = name.trim()
             val trimmedDesc = description.trim()
             val trimmedCategory = category.trim()
-            val trimmedImageUrl = imageUrl.trim().take(1000)
+            val trimmedImageUrl = imageUrl.trim().take(MenuImageStorageHelper.MAX_STORED_IMAGE_CHARS)
             require(trimmedName.length in 1..80) { "Name must be 1 to 80 characters" }
             require(trimmedDesc.length <= 300) { "Description must be 300 characters or less" }
             require(trimmedCategory.length in 1..40) { "Category must be 1 to 40 characters" }
             require(pricePkr in 1..100000) { "Price must be between 1 and 100,000 PKR" }
-            require(MenuImageStorageHelper.isValidRemoteImageUrl(trimmedImageUrl)) {
-                "Image URL must start with http:// or https://"
+            require(MenuImageStorageHelper.isValidStoredImageRef(trimmedImageUrl)) {
+                "Invalid photo format. Please upload a photo from your gallery."
             }
 
-            if (itemId.isNullOrBlank()) {
+            val existingDocId = itemId?.trim()?.takeIf { it.isNotBlank() }
+            if (existingDocId == null) {
                 val docRef = if (!preAllocatedId.isNullOrBlank()) {
                     db.collection("menu_items").document(preAllocatedId.trim())
                 } else {
@@ -474,21 +476,39 @@ class CafeRepository(
                 )
                 docRef.set(payload).await()
             } else {
-                val docRef = db.collection("menu_items").document(itemId)
+                val docRef = db.collection("menu_items").document(existingDocId)
                 docPath = docRef.path
-                val updates = mapOf(
-                    "name" to trimmedName,
-                    "description" to trimmedDesc,
-                    "category" to trimmedCategory,
-                    "pricePkr" to pricePkr,
-                    "imageKey" to imageKey.ifBlank { "zinger_burger" },
-                    "imageUrl" to trimmedImageUrl,
-                    "badgeText" to badgeText.trim().take(30),
-                    "available" to available,
-                    "sortOrder" to sortOrder.coerceIn(0L, 10000L),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                docRef.update(updates).await()
+                val existingSnap = docRef.get().await()
+                if (existingSnap.exists()) {
+                    val updates = mapOf(
+                        "name" to trimmedName,
+                        "description" to trimmedDesc,
+                        "category" to trimmedCategory,
+                        "pricePkr" to pricePkr,
+                        "imageKey" to imageKey.ifBlank { "zinger_burger" },
+                        "imageUrl" to trimmedImageUrl,
+                        "badgeText" to badgeText.trim().take(30),
+                        "available" to available,
+                        "sortOrder" to sortOrder.coerceIn(0L, 10000L),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    docRef.update(updates).await()
+                } else {
+                    val payload = mapOf(
+                        "name" to trimmedName,
+                        "description" to trimmedDesc,
+                        "category" to trimmedCategory,
+                        "pricePkr" to pricePkr,
+                        "imageKey" to imageKey.ifBlank { "zinger_burger" },
+                        "imageUrl" to trimmedImageUrl,
+                        "badgeText" to badgeText.trim().take(30),
+                        "available" to available,
+                        "sortOrder" to sortOrder.coerceIn(0L, 10000L),
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    docRef.set(payload).await()
+                }
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -1158,15 +1178,47 @@ class CafeRepository(
         }
     }
 
+    fun observeBranchPromotions(branchId: String): Flow<List<Promotion>> {
+        val path = "promotions"
+        return db.collection(path)
+            .whereEqualTo("branchId", branchId)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(Promotion::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedByDescending { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) }
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
+    }
+
     suspend fun savePromotion(
         code: String,
         discountType: String,
         discountValue: Long,
         minOrderPkr: Long,
-        active: Boolean
+        active: Boolean,
+        branchId: String = "",
+        branchName: String = "",
+        expiresAt: Timestamp? = null,
+        promoDocId: String? = null
     ): Result<Unit> {
         val cleanCode = code.trim().uppercase()
-        val docId = cleanCode.lowercase().replace(Regex("[^a-z0-9_\\-]"), "_")
+        val cleanBranchId = branchId.trim()
+        val cleanBranchName = branchName.trim().take(80)
+        val sanitizedCode = cleanCode.lowercase().replace(Regex("[^a-z0-9_\\-]"), "_")
+        val docId = promoDocId?.trim()?.takeIf { it.isNotBlank() } ?: if (cleanBranchId.isNotBlank()) {
+            "${cleanBranchId}_${sanitizedCode}".take(100)
+        } else {
+            sanitizedCode
+        }
         val docPath = "promotions/$docId"
         return try {
             requireUserId()
@@ -1180,28 +1232,31 @@ class CafeRepository(
             val docRef = db.collection("promotions").document(docId)
             val existing = docRef.get().await()
             if (existing.exists()) {
-                docRef.update(
-                    mapOf(
-                        "code" to cleanCode,
-                        "discountType" to discountType,
-                        "discountValue" to discountValue,
-                        "minOrderPkr" to minOrderPkr.coerceAtLeast(0L),
-                        "active" to active,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
+                val updates = mutableMapOf<String, Any?>(
+                    "code" to cleanCode,
+                    "discountType" to discountType,
+                    "discountValue" to discountValue,
+                    "minOrderPkr" to minOrderPkr.coerceAtLeast(0L),
+                    "active" to active,
+                    "branchName" to cleanBranchName,
+                    "expiresAt" to expiresAt,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.update(updates).await()
             } else {
-                docRef.set(
-                    mapOf(
-                        "code" to cleanCode,
-                        "discountType" to discountType,
-                        "discountValue" to discountValue,
-                        "minOrderPkr" to minOrderPkr.coerceAtLeast(0L),
-                        "active" to active,
-                        "createdAt" to FieldValue.serverTimestamp(),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
+                val payload = mutableMapOf<String, Any?>(
+                    "code" to cleanCode,
+                    "discountType" to discountType,
+                    "discountValue" to discountValue,
+                    "minOrderPkr" to minOrderPkr.coerceAtLeast(0L),
+                    "active" to active,
+                    "branchId" to cleanBranchId,
+                    "branchName" to cleanBranchName,
+                    "expiresAt" to expiresAt,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.set(payload).await()
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -1226,7 +1281,11 @@ class CafeRepository(
         }
     }
 
-    suspend fun validatePromoCode(rawCode: String, subtotalPkr: Long): Result<Pair<Promotion, Long>> {
+    suspend fun validatePromoCode(
+        rawCode: String,
+        subtotalPkr: Long,
+        selectedBranchId: String = ""
+    ): Result<Pair<Promotion, Long>> {
         val cleanCode = rawCode.trim().uppercase()
         val path = "promotions"
         return try {
@@ -1235,24 +1294,44 @@ class CafeRepository(
 
             val querySnap = db.collection(path)
                 .whereEqualTo("code", cleanCode)
-                .limit(1)
+                .limit(20)
                 .get()
                 .await()
 
-            val promo: Promotion? = if (!querySnap.isEmpty) {
-                querySnap.documents.first().toObject(Promotion::class.java)
+            val candidates: List<Promotion> = if (!querySnap.isEmpty) {
+                querySnap.documents.mapNotNull { it.toObject(Promotion::class.java) }
             } else {
-                // If SuperAdmin has not yet seeded /promotions in Firestore, allow built-in starter codes
                 val anyPromo = db.collection(path).limit(1).get().await()
                 if (anyPromo.isEmpty) {
-                    SeedMenuData.defaultPromotions.firstOrNull { it.code.equals(cleanCode, ignoreCase = true) }
+                    SeedMenuData.defaultPromotions.filter { it.code.equals(cleanCode, ignoreCase = true) }
                 } else {
-                    null
+                    emptyList()
                 }
             }
 
-            if (promo == null || !promo.active) {
-                return Result.failure(IllegalArgumentException("Promo code '$cleanCode' is invalid or expired."))
+            if (candidates.isEmpty()) {
+                return Result.failure(IllegalArgumentException("Promo code '$cleanCode' was not found."))
+            }
+
+            // Prefer exact branch match first, then global promo
+            val branchMatch = candidates.firstOrNull {
+                it.branchId.isNotBlank() && it.branchId == selectedBranchId
+            }
+            val globalMatch = candidates.firstOrNull { it.isGlobal() }
+            val promo = branchMatch ?: globalMatch
+
+            if (promo == null) {
+                val otherBranchName = candidates.firstOrNull()?.branchName?.ifBlank { "another branch" } ?: "another branch"
+                return Result.failure(
+                    IllegalArgumentException("Promo code '$cleanCode' is only valid for $otherBranchName.")
+                )
+            }
+
+            if (!promo.active) {
+                return Result.failure(IllegalArgumentException("Promo code '$cleanCode' is currently paused."))
+            }
+            if (promo.isExpired()) {
+                return Result.failure(IllegalArgumentException("Promo code '$cleanCode' has expired."))
             }
             if (subtotalPkr < promo.minOrderPkr) {
                 return Result.failure(
@@ -1270,6 +1349,145 @@ class CafeRepository(
             if (e !is IllegalArgumentException) {
                 handleFirestoreError(e, OperationType.LIST, path)
             }
+            Result.failure(e)
+        }
+    }
+
+    // 6b. Branch-Exclusive Seasonal Banners (Firestore 'branch_banners' collection)
+    fun allocateBranchBannerId(): String = db.collection("branch_banners").document().id
+
+    fun observeAllBranchBanners(): Flow<List<BranchBanner>> {
+        val path = "branch_banners"
+        return db.collection(path)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(BranchBanner::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedByDescending { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) }
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
+    }
+
+    fun observeBranchBanners(branchId: String): Flow<List<BranchBanner>> {
+        val path = "branch_banners"
+        return db.collection(path)
+            .whereEqualTo("branchId", branchId)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(BranchBanner::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedByDescending { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) }
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
+    }
+
+    suspend fun saveBranchBanner(
+        bannerId: String?,
+        branchId: String,
+        branchName: String,
+        title: String,
+        subtitle: String,
+        promoCode: String,
+        badgeText: String,
+        imageUrl: String,
+        targetCategory: String,
+        active: Boolean,
+        expiresAt: Timestamp? = null,
+        preAllocatedId: String? = null
+    ): Result<Unit> {
+        var docPath = "branch_banners"
+        return try {
+            requireUserId()
+            val cleanBranchId = branchId.trim()
+            val cleanBranchName = branchName.trim().take(80)
+            val cleanTitle = title.trim().take(80)
+            val cleanSubtitle = subtitle.trim().take(200)
+            val cleanPromoCode = promoCode.trim().uppercase().take(30)
+            val cleanBadge = badgeText.trim().ifBlank { "SEASONAL OFFER" }.take(30)
+            val cleanImageUrl = imageUrl.trim().take(MenuImageStorageHelper.MAX_STORED_IMAGE_CHARS)
+            val cleanCategory = targetCategory.trim().ifBlank { "DEALS" }.take(40)
+
+            require(cleanBranchId.isNotBlank()) { "Branch ID is required" }
+            require(cleanTitle.length in 2..80) { "Banner headline must be 2 to 80 characters" }
+            require(cleanImageUrl.length >= 8 && MenuImageStorageHelper.isValidStoredImageRef(cleanImageUrl)) {
+                "Please upload a banner photo from your gallery."
+            }
+
+            if (bannerId.isNullOrBlank()) {
+                val docRef = if (!preAllocatedId.isNullOrBlank()) {
+                    db.collection("branch_banners").document(preAllocatedId.trim())
+                } else {
+                    db.collection("branch_banners").document()
+                }
+                docPath = docRef.path
+                val payload = mutableMapOf<String, Any?>(
+                    "branchId" to cleanBranchId,
+                    "branchName" to cleanBranchName,
+                    "title" to cleanTitle,
+                    "subtitle" to cleanSubtitle,
+                    "promoCode" to cleanPromoCode,
+                    "badgeText" to cleanBadge,
+                    "imageUrl" to cleanImageUrl,
+                    "targetCategory" to cleanCategory,
+                    "active" to active,
+                    "expiresAt" to expiresAt,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.set(payload).await()
+            } else {
+                val docRef = db.collection("branch_banners").document(bannerId)
+                docPath = docRef.path
+                val updates = mutableMapOf<String, Any?>(
+                    "branchName" to cleanBranchName,
+                    "title" to cleanTitle,
+                    "subtitle" to cleanSubtitle,
+                    "promoCode" to cleanPromoCode,
+                    "badgeText" to cleanBadge,
+                    "imageUrl" to cleanImageUrl,
+                    "targetCategory" to cleanCategory,
+                    "active" to active,
+                    "expiresAt" to expiresAt,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.update(updates).await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteBranchBanner(bannerId: String): Result<Unit> {
+        val docPath = "branch_banners/$bannerId"
+        return try {
+            requireUserId()
+            require(bannerId.isNotBlank()) { "Banner ID required" }
+            db.collection("branch_banners").document(bannerId).delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docPath)
             Result.failure(e)
         }
     }
