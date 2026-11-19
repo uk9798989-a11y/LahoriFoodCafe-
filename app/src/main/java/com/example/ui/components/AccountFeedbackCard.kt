@@ -40,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -86,9 +87,15 @@ fun AccountFeedbackCard(
     val activeBranches = remember(branches) {
         branches.filter { it.active }.ifEmpty { branches.ifEmpty { BranchDirectory.defaultBranches } }
     }
-    var selectedBranchId by remember(defaultBranchId, activeBranches) {
+    var selectedBranchId by remember {
         val valid = activeBranches.any { it.id == defaultBranchId }
         mutableStateOf(if (valid) defaultBranchId else activeBranches.first().id)
+    }
+    LaunchedEffect(activeBranches, defaultBranchId) {
+        if (activeBranches.none { it.id == selectedBranchId }) {
+            selectedBranchId = activeBranches.firstOrNull { it.id == defaultBranchId }?.id
+                ?: activeBranches.first().id
+        }
     }
     var foodRating by remember { mutableIntStateOf(5) }
     var serviceRating by remember { mutableIntStateOf(5) }

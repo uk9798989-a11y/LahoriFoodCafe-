@@ -59,11 +59,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.CafeRepository
+import com.example.data.LocationHelper
 import com.example.data.ThemePreferences
 import com.example.data.attemptAutoSignIn
 import com.example.data.authStateFlow
 import com.example.data.onGoogleSignInClicked
 import com.example.data.signOutUser
+import java.util.Locale
 import com.example.model.BranchDirectory
 import com.example.model.OrderStatus
 import com.example.model.OrderType
@@ -110,10 +112,12 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private var notificationOrderIdState by mutableStateOf<String?>(null)
+    private var notificationEventTypeState by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         notificationOrderIdState = intent?.getStringExtra(OrderNotificationHelper.EXTRA_TRACK_ORDER_ID)
+        notificationEventTypeState = intent?.getStringExtra(OrderNotificationHelper.EXTRA_NOTIFICATION_EVENT_TYPE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             splashScreen.setOnExitAnimationListener { splashScreenView ->
                 splashScreenView.remove()
@@ -157,7 +161,11 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         pendingNotificationOrderId = notificationOrderIdState,
-                        onConsumeNotificationOrderId = { notificationOrderIdState = null }
+                        pendingNotificationEventType = notificationEventTypeState,
+                        onConsumeNotificationOrderId = {
+                            notificationOrderIdState = null
+                            notificationEventTypeState = null
+                        }
                     )
                     LahoriSplashOverlay(
                         onSplashFinished = { splashActive = false }
@@ -173,6 +181,7 @@ class MainActivity : ComponentActivity() {
         val orderId = intent.getStringExtra(OrderNotificationHelper.EXTRA_TRACK_ORDER_ID)
         if (!orderId.isNullOrBlank()) {
             notificationOrderIdState = orderId
+            notificationEventTypeState = intent.getStringExtra(OrderNotificationHelper.EXTRA_NOTIFICATION_EVENT_TYPE)
         }
     }
 }
@@ -182,6 +191,7 @@ private fun LahoriAppRoot(
     isDarkMode: Boolean,
     onToggleDarkMode: (Boolean) -> Unit,
     pendingNotificationOrderId: String?,
+    pendingNotificationEventType: String?,
     onConsumeNotificationOrderId: () -> Unit
 ) {
     val context = LocalContext.current
@@ -275,6 +285,7 @@ private fun LahoriAppRoot(
                 isDarkMode = isDarkMode,
                 onToggleDarkMode = onToggleDarkMode,
                 pendingNotificationOrderId = pendingNotificationOrderId,
+                pendingNotificationEventType = pendingNotificationEventType,
                 onConsumeNotificationOrderId = onConsumeNotificationOrderId,
                 onSignOut = {
                     signOutUser(credentialManager, scope) {
@@ -293,6 +304,7 @@ private fun GuestCafeShell(
     onToggleDarkMode: (Boolean) -> Unit,
     onTriggerGoogleSignIn: (onVerified: () -> Unit) -> Unit
 ) {
+    val context = LocalContext.current
     val sessionState by sessionCart.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -303,6 +315,37 @@ private fun GuestCafeShell(
     var showSavedAddressesSheet by remember { mutableStateOf(false) }
     var showPickupBranchSheet by remember { mutableStateOf(false) }
     var showBucketSheet by remember { mutableStateOf(false) }
+    var isLocatingGps by remember { mutableStateOf(false) }
+
+    val triggerGpsDetection: (Boolean) -> Unit = { keepOrderType ->
+        if (!isLocatingGps) {
+            isLocatingGps = true
+            scope.launch {
+                val gpsRes = LocationHelper.fetchCurrentLocationWithAddress(context)
+                isLocatingGps = false
+                gpsRes.onSuccess { loc ->
+                    val nearest = BranchDirectory.nearestBranch(
+                        lat = loc.latitude,
+                        lng = loc.longitude,
+                        branches = BranchDirectory.defaultBranches
+                    )
+                    sessionCart.applyDetectedGpsLocation(
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        formattedAddress = loc.formattedAddress,
+                        areaLabel = loc.areaLabel,
+                        nearestBranchId = nearest.id,
+                        keepOrderType = keepOrderType
+                    )
+                    val dist = BranchDirectory.distanceToKm(nearest, loc.latitude, loc.longitude)
+                    val distText = if (dist != null) " (~${String.format(Locale.US, "%.1f", dist)} km)" else ""
+                    snackbarHostState.showSnackbar("Nearest branch: ${nearest.displayShortLabel()}$distText")
+                }.onFailure { err ->
+                    snackbarHostState.showSnackbar(err.localizedMessage ?: "Could not detect GPS location")
+                }
+            }
+        }
+    }
 
     val cartQuantities = remember(sessionState.cartItems) {
         sessionState.cartItems.associate { it.menuItem.id to it.quantity }
@@ -331,6 +374,16 @@ private fun GuestCafeShell(
                 onPickupClick = {
                     sessionCart.setOrderType(OrderType.PICKUP)
                     showPickupBranchSheet = true
+                },
+                branches = BranchDirectory.defaultBranches,
+                deviceLatitude = sessionState.deviceLatitude,
+                deviceLongitude = sessionState.deviceLongitude,
+                onLocationBannerClick = {
+                    if (sessionState.orderType == OrderType.DELIVERY) {
+                        showSavedAddressesSheet = true
+                    } else {
+                        showPickupBranchSheet = true
+                    }
                 }
             )
         },
@@ -421,7 +474,17 @@ private fun GuestCafeShell(
                 sessionCart.selectPickupBranch(branch.id)
                 showPickupBranchSheet = false
             },
-            onDismiss = { showPickupBranchSheet = false }
+            onDismiss = { showPickupBranchSheet = false },
+            deviceLatitude = sessionState.deviceLatitude,
+            deviceLongitude = sessionState.deviceLongitude,
+            detectedGpsAddress = sessionState.detectedGpsAddress,
+            isLocatingGps = isLocatingGps,
+            onUseCurrentLocation = { triggerGpsDetection(true) },
+            onSwitchToDelivery = {
+                sessionCart.setOrderType(OrderType.DELIVERY)
+                showPickupBranchSheet = false
+                showSavedAddressesSheet = true
+            }
         )
     }
 
@@ -437,7 +500,33 @@ private fun GuestCafeShell(
                 }
             },
             onStartOrder = { showSavedAddressesSheet = false },
-            onDismiss = { showSavedAddressesSheet = false }
+            onDismiss = { showSavedAddressesSheet = false },
+            branches = BranchDirectory.defaultBranches,
+            orderType = sessionState.orderType,
+            selectedBranchId = sessionState.selectedBranchId,
+            deviceLatitude = sessionState.deviceLatitude,
+            deviceLongitude = sessionState.deviceLongitude,
+            detectedGpsAddress = sessionState.detectedGpsAddress,
+            isLocatingGps = isLocatingGps,
+            onOrderTypeChange = { sessionCart.setOrderType(it) },
+            onUseCurrentLocation = { triggerGpsDetection(true) },
+            onSelectPickupBranch = { branch ->
+                if (sessionState.orderType == OrderType.PICKUP) {
+                    sessionCart.selectPickupBranch(branch.id)
+                } else {
+                    sessionCart.selectQuickDeliveryArea(branch.areas.firstOrNull() ?: branch.displayShortLabel(), branch.id)
+                }
+                scope.launch {
+                    snackbarHostState.showSnackbar("Selected ${branch.displayShortLabel()}")
+                }
+            },
+            onSelectQuickArea = { area, branchId ->
+                sessionCart.selectQuickDeliveryArea(area, branchId)
+                val matched = BranchDirectory.byId(branchId)
+                scope.launch {
+                    snackbarHostState.showSnackbar("$area routed to ${matched.displayShortLabel()}")
+                }
+            }
         )
     }
 
@@ -480,10 +569,11 @@ private fun GuestCafeShell(
             },
             onClearPromoCode = { sessionCart.clearPromo() },
             onPlaceOrder = { name, phone, _ ->
+                val chosenBranch = BranchDirectory.byId(sessionState.selectedBranchId)
                 val address = if (sessionState.orderType == OrderType.DELIVERY) {
-                    sessionState.selectedAddressStreet.ifBlank { "Lahore Delivery" }
+                    sessionState.selectedAddressStreet.ifBlank { "${chosenBranch.displayShortLabel()} Delivery" }
                 } else {
-                    "Self Pickup — ${BranchDirectory.byId(sessionState.selectedBranchId).shortAddress}"
+                    "Self Pickup — ${chosenBranch.shortAddress}"
                 }
                 sessionCart.setPendingGuestOrder(
                     PendingGuestOrder(
@@ -516,6 +606,7 @@ private fun AuthenticatedCafeShell(
     isDarkMode: Boolean,
     onToggleDarkMode: (Boolean) -> Unit,
     pendingNotificationOrderId: String?,
+    pendingNotificationEventType: String?,
     onConsumeNotificationOrderId: () -> Unit,
     onSignOut: () -> Unit
 ) {
@@ -556,6 +647,7 @@ private fun AuthenticatedCafeShell(
     val allBranchAdmins by viewModel.allBranchAdmins.collectAsStateWithLifecycle()
     val promotionsList by viewModel.promotionsList.collectAsStateWithLifecycle()
     val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
+    val allFeedback by viewModel.allFeedback.collectAsStateWithLifecycle()
     val pendingSurveyOrder by viewModel.pendingSurveyOrder.collectAsStateWithLifecycle()
     val isSubmittingReview by viewModel.isSubmittingReview.collectAsStateWithLifecycle()
     val isSubmittingFeedback by viewModel.isSubmittingFeedback.collectAsStateWithLifecycle()
@@ -564,8 +656,41 @@ private fun AuthenticatedCafeShell(
     val branchAssignmentLoaded by viewModel.branchAssignmentLoaded.collectAsStateWithLifecycle()
     val trackedOrderState by viewModel.trackedOrderState.collectAsStateWithLifecycle()
     val fcmTokenRegistered by viewModel.fcmTokenRegistered.collectAsStateWithLifecycle()
+    val newBranchOrderAlert by viewModel.newBranchOrderAlert.collectAsStateWithLifecycle()
     val actionError by viewModel.actionError.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
+
+    var isLocatingGps by remember { mutableStateOf(false) }
+
+    val triggerGpsDetection: (Boolean) -> Unit = { keepOrderType ->
+        if (!isLocatingGps) {
+            isLocatingGps = true
+            scope.launch {
+                val gpsRes = LocationHelper.fetchCurrentLocationWithAddress(context)
+                isLocatingGps = false
+                gpsRes.onSuccess { loc ->
+                    val nearest = BranchDirectory.nearestBranch(
+                        lat = loc.latitude,
+                        lng = loc.longitude,
+                        branches = branchesList
+                    )
+                    sessionCart.applyDetectedGpsLocation(
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        formattedAddress = loc.formattedAddress,
+                        areaLabel = loc.areaLabel,
+                        nearestBranchId = nearest.id,
+                        keepOrderType = keepOrderType
+                    )
+                    val dist = BranchDirectory.distanceToKm(nearest, loc.latitude, loc.longitude)
+                    val distText = if (dist != null) " (~${String.format(Locale.US, "%.1f", dist)} km)" else ""
+                    snackbarHostState.showSnackbar("Nearest branch: ${nearest.displayShortLabel()}$distText")
+                }.onFailure { err ->
+                    snackbarHostState.showSnackbar(err.localizedMessage ?: "Could not detect GPS location")
+                }
+            }
+        }
+    }
 
     var notificationsGranted by remember {
         mutableStateOf(OrderNotificationHelper.hasNotificationPermission(context))
@@ -585,25 +710,50 @@ private fun AuthenticatedCafeShell(
         }
     }
 
-    LaunchedEffect(pendingNotificationOrderId) {
+    LaunchedEffect(pendingNotificationOrderId, pendingNotificationEventType, effectiveRole) {
         val targetOrderId = pendingNotificationOrderId
         if (!targetOrderId.isNullOrBlank()) {
-            viewModel.startTrackingOrder(targetOrderId)
+            if (pendingNotificationEventType == OrderNotificationHelper.EVENT_NEW_ORDER) {
+                snackbarHostState.showSnackbar("New branch order #${targetOrderId.takeLast(6).uppercase()} is in your queue!")
+            } else {
+                viewModel.startTrackingOrder(targetOrderId)
+            }
             onConsumeNotificationOrderId()
         }
     }
 
     LaunchedEffect(Unit) {
         FcmOrderEventBus.events.collect { pushEvent ->
-            val result = snackbarHostState.showSnackbar(
-                message = "${pushEvent.title}: ${pushEvent.body}",
-                actionLabel = "TRACK",
-                withDismissAction = true
-            )
-            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
-                viewModel.startTrackingOrder(pushEvent.orderId)
+            if (pushEvent.eventType == OrderNotificationHelper.EVENT_NEW_ORDER) {
+                snackbarHostState.showSnackbar(
+                    message = "${pushEvent.title}: ${pushEvent.body}",
+                    withDismissAction = true
+                )
+            } else {
+                val result = snackbarHostState.showSnackbar(
+                    message = "${pushEvent.title}: ${pushEvent.body}",
+                    actionLabel = "TRACK",
+                    withDismissAction = true
+                )
+                if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                    viewModel.startTrackingOrder(pushEvent.orderId)
+                }
             }
         }
+    }
+
+    LaunchedEffect(newBranchOrderAlert) {
+        val incoming = newBranchOrderAlert ?: return@LaunchedEffect
+        OrderNotificationHelper.notifyNewBranchOrder(
+            context = context,
+            orderId = incoming.id,
+            branchId = incoming.branchId,
+            branchName = incoming.branchName,
+            customerName = incoming.customerName,
+            totalPkr = incoming.totalPkr,
+            itemsSummary = incoming.itemsSummary,
+            orderType = incoming.orderType
+        )
     }
 
     // Fire real Android system notification whenever order status transitions in Firestore
@@ -664,11 +814,27 @@ private fun AuthenticatedCafeShell(
             branchAdmins = allBranchAdmins,
             promotions = promotionsList,
             reviews = allReviews,
+            feedbackList = allFeedback,
+            onDeleteReview = { viewModel.deleteReview(it) },
+            onDeleteFeedback = { viewModel.deleteFeedback(it) },
             isSavingStaff = isSavingStaff,
             branches = branchesList,
             isSavingBranch = isSavingBranch,
-            onSaveBranch = { branchId, name, shortLabel, shortAddress, areas, active, sortOrder, done ->
-                viewModel.saveBranch(branchId, name, shortLabel, shortAddress, areas, active, sortOrder, done)
+            onSaveBranch = { branchId, name, shortLabel, shortAddress, areas, active, sortOrder, lat, lng, mapUrl, openHours, done ->
+                viewModel.saveBranch(
+                    branchId = branchId,
+                    name = name,
+                    shortLabel = shortLabel,
+                    shortAddress = shortAddress,
+                    areas = areas,
+                    active = active,
+                    sortOrder = sortOrder,
+                    latitude = lat,
+                    longitude = lng,
+                    mapUrl = mapUrl,
+                    openHours = openHours,
+                    onDone = done
+                )
             },
             onDeleteBranch = { viewModel.deleteBranch(it) },
             onSeedBranches = { viewModel.seedBranchesNow() },
@@ -735,7 +901,9 @@ private fun AuthenticatedCafeShell(
                         onSignOut()
                     }
                 },
-                branches = branchesList
+                branches = branchesList,
+                newOrderAlert = newBranchOrderAlert,
+                onDismissNewOrderAlert = { viewModel.dismissNewBranchOrderAlert() }
             )
             SnackbarHost(
                 hostState = snackbarHostState,
@@ -755,7 +923,9 @@ private fun AuthenticatedCafeShell(
             onUpdateOrderStatus = { orderId, status -> viewModel.updateOrderStatus(orderId, status) },
             onBack = { showBranchAdminDashboard = false },
             managerEmail = userEmail,
-            branches = branchesList
+            branches = branchesList,
+            newOrderAlert = newBranchOrderAlert,
+            onDismissNewOrderAlert = { viewModel.dismissNewBranchOrderAlert() }
         )
         return
     }
@@ -767,7 +937,8 @@ private fun AuthenticatedCafeShell(
             reviewsByOrderId = reviewsByOrderId,
             onSelectTrackedOrder = { orderId -> viewModel.startTrackingOrder(orderId) },
             onRateOrder = { order -> viewModel.openOrderSurvey(order) },
-            onBack = { viewModel.stopTrackingOrder() }
+            onBack = { viewModel.stopTrackingOrder() },
+            snackbarHostState = snackbarHostState
         )
         pendingSurveyOrder?.let { surveyOrder ->
             OrderReviewSurveySheet(
@@ -811,7 +982,16 @@ private fun AuthenticatedCafeShell(
                     sessionCart.setOrderType(OrderType.PICKUP)
                     showPickupBranchSheet = true
                 },
-                branches = branchesList
+                branches = branchesList,
+                deviceLatitude = sessionState.deviceLatitude,
+                deviceLongitude = sessionState.deviceLongitude,
+                onLocationBannerClick = {
+                    if (sessionState.orderType == OrderType.DELIVERY) {
+                        showSavedAddressesSheet = true
+                    } else {
+                        showPickupBranchSheet = true
+                    }
+                }
             )
         },
         bottomBar = {
@@ -982,7 +1162,17 @@ private fun AuthenticatedCafeShell(
                 sessionCart.selectPickupBranch(branch.id)
                 showPickupBranchSheet = false
             },
-            onDismiss = { showPickupBranchSheet = false }
+            onDismiss = { showPickupBranchSheet = false },
+            deviceLatitude = sessionState.deviceLatitude,
+            deviceLongitude = sessionState.deviceLongitude,
+            detectedGpsAddress = sessionState.detectedGpsAddress,
+            isLocatingGps = isLocatingGps,
+            onUseCurrentLocation = { triggerGpsDetection(true) },
+            onSwitchToDelivery = {
+                sessionCart.setOrderType(OrderType.DELIVERY)
+                showPickupBranchSheet = false
+                showSavedAddressesSheet = true
+            }
         )
     }
 
@@ -1000,7 +1190,32 @@ private fun AuthenticatedCafeShell(
             },
             onStartOrder = { showSavedAddressesSheet = false },
             onDismiss = { showSavedAddressesSheet = false },
-            branches = branchesList
+            branches = branchesList,
+            orderType = sessionState.orderType,
+            selectedBranchId = sessionState.selectedBranchId,
+            deviceLatitude = sessionState.deviceLatitude,
+            deviceLongitude = sessionState.deviceLongitude,
+            detectedGpsAddress = sessionState.detectedGpsAddress,
+            isLocatingGps = isLocatingGps,
+            onOrderTypeChange = { sessionCart.setOrderType(it) },
+            onUseCurrentLocation = { triggerGpsDetection(true) },
+            onSelectPickupBranch = { branch ->
+                if (sessionState.orderType == OrderType.PICKUP) {
+                    sessionCart.selectPickupBranch(branch.id)
+                } else {
+                    sessionCart.selectQuickDeliveryArea(branch.areas.firstOrNull() ?: branch.displayShortLabel(), branch.id)
+                }
+                scope.launch {
+                    snackbarHostState.showSnackbar("Selected ${branch.displayShortLabel()}")
+                }
+            },
+            onSelectQuickArea = { area, branchId ->
+                sessionCart.selectQuickDeliveryArea(area, branchId)
+                val matched = BranchDirectory.byId(branchId, branchesList)
+                scope.launch {
+                    snackbarHostState.showSnackbar("$area routed to ${matched.displayShortLabel()}")
+                }
+            }
         )
     }
 

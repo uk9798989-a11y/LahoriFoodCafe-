@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -33,9 +34,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddBusiness
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocalOffer
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.ReceiptLong
@@ -81,6 +84,7 @@ import androidx.compose.ui.unit.sp
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
+import com.example.model.CafeFeedback
 import com.example.model.CafeOrder
 import com.example.model.MenuItem
 import com.example.model.OrderReview
@@ -133,6 +137,9 @@ fun SuperAdminDashboardScreen(
     onDeletePromotion: (String) -> Unit,
     onBack: () -> Unit,
     reviews: List<OrderReview> = emptyList(),
+    feedbackList: List<CafeFeedback> = emptyList(),
+    onDeleteReview: (String) -> Unit = {},
+    onDeleteFeedback: (String) -> Unit = {},
     isSavingStaff: Boolean = false,
     branches: List<CafeBranch> = BranchDirectory.defaultBranches,
     isSavingBranch: Boolean = false,
@@ -144,8 +151,12 @@ fun SuperAdminDashboardScreen(
         areas: List<String>,
         active: Boolean,
         sortOrder: Long?,
+        latitude: Double,
+        longitude: Double,
+        mapUrl: String,
+        openHours: String,
         onDone: (String) -> Unit
-    ) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    ) -> Unit = { _, _, _, _, _, _, _, _, _, _, _, _ -> },
     onDeleteBranch: (String) -> Unit = {},
     onSeedBranches: () -> Unit = {}
 ) {
@@ -508,82 +519,12 @@ fun SuperAdminDashboardScreen(
                 }
 
                 5 -> {
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        if (reviews.isEmpty()) {
-                            item(key = "no_reviews") {
-                                Text(
-                                    text = "No customer order reviews yet. Ratings appear automatically after delivered orders are reviewed.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        } else {
-                            items(reviews, key = { it.id }) { review ->
-                                Surface(
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = MaterialTheme.colorScheme.surface,
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(14.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = "${review.customerName} • #${review.orderId.takeLast(6).uppercase()}",
-                                                style = MaterialTheme.typography.titleSmall,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Surface(
-                                                color = LahoriGold.copy(alpha = 0.22f),
-                                                shape = RoundedCornerShape(8.dp)
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                ) {
-                                                    Icon(Icons.Filled.Star, contentDescription = null, tint = LahoriGold, modifier = Modifier.size(14.dp))
-                                                    Text(
-                                                        text = "${review.rating}/5",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.onSurface
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        Text(
-                                            text = "${review.branchName} • ${review.itemsSummary}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = LahoriRed
-                                        )
-                                        if (review.comment.isNotBlank()) {
-                                            Text(
-                                                text = "\"${review.comment}\"",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                        Text(
-                                            text = formatOrderDate(review.createdAt),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    SuperAdminReviewsTab(
+                        reviews = reviews,
+                        feedbackList = feedbackList,
+                        onDeleteReview = onDeleteReview,
+                        onDeleteFeedback = onDeleteFeedback
+                    )
                 }
             }
         }
@@ -624,6 +565,268 @@ fun SuperAdminDashboardScreen(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+private fun SuperAdminReviewsTab(
+    reviews: List<OrderReview>,
+    feedbackList: List<CafeFeedback>,
+    onDeleteReview: (String) -> Unit,
+    onDeleteFeedback: (String) -> Unit
+) {
+    var filterMode by remember { mutableStateOf("ALL") }
+
+    val avgOrderRating = remember(reviews) {
+        if (reviews.isEmpty()) 0.0 else reviews.map { it.rating }.average()
+    }
+    val avgFoodServiceRating = remember(feedbackList) {
+        if (feedbackList.isEmpty()) 0.0
+        else feedbackList.map { (it.foodRating + it.serviceRating) / 2.0 }.average()
+    }
+
+    val showOrderReviews = filterMode == "ALL" || filterMode == "ORDERS"
+    val showCafeFeedback = filterMode == "ALL" || filterMode == "FEEDBACK"
+
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item(key = "reviews_summary_card") {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = LahoriBlack,
+                border = BorderStroke(1.dp, LahoriGold.copy(alpha = 0.55f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "CUSTOMER SENTIMENT OVERVIEW",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = LahoriGold
+                        )
+                        Text(
+                            text = "${reviews.size} Order Reviews • ${feedbackList.size} Food & Service",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = LahoriWhite
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = if (reviews.isEmpty()) "Orders: —" else String.format(java.util.Locale.US, "Orders: %.1f★", avgOrderRating),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = LahoriGold
+                        )
+                        Text(
+                            text = if (feedbackList.isEmpty()) "Cafe: —" else String.format(java.util.Locale.US, "Cafe: %.1f★", avgFoodServiceRating),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = LahoriWhite.copy(alpha = 0.85f)
+                        )
+                    }
+                }
+            }
+        }
+
+        item(key = "reviews_filter_chips") {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    "ALL" to "All (${reviews.size + feedbackList.size})",
+                    "ORDERS" to "Order Reviews (${reviews.size})",
+                    "FEEDBACK" to "Food & Service (${feedbackList.size})"
+                ).forEach { (key, label) ->
+                    FilterChip(
+                        selected = filterMode == key,
+                        onClick = { filterMode = key },
+                        label = { Text(label, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = LahoriRed,
+                            selectedLabelColor = LahoriWhite
+                        )
+                    )
+                }
+            }
+        }
+
+        if (reviews.isEmpty() && feedbackList.isEmpty()) {
+            item(key = "no_reviews_at_all") {
+                Text(
+                    text = "No customer order reviews or account feedback submitted yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        if (showOrderReviews && reviews.isNotEmpty()) {
+            item(key = "order_reviews_heading") {
+                Text(
+                    text = "ORDER REVIEWS (${reviews.size})",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            items(reviews, key = { "rev_${it.id}" }) { review ->
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${review.customerName.ifBlank { "Customer" }} • #${review.orderId.takeLast(6).uppercase()}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    color = LahoriGold.copy(alpha = 0.22f),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Star, contentDescription = null, tint = LahoriGold, modifier = Modifier.size(14.dp))
+                                        Text("${review.rating}/5", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                                IconButton(
+                                    onClick = { onDeleteReview(review.id) },
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .testTag("delete_review_${review.id}")
+                                ) {
+                                    Icon(Icons.Filled.DeleteOutline, contentDescription = "Delete order review", tint = LahoriRed)
+                                }
+                            }
+                        }
+                        Text(
+                            text = "${review.branchName} • ${review.itemsSummary}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = LahoriRed
+                        )
+                        if (review.comment.isNotBlank()) {
+                            Text(
+                                text = "\"${review.comment}\"",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Text(
+                            text = formatOrderDate(review.createdAt),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showCafeFeedback && feedbackList.isNotEmpty()) {
+            item(key = "cafe_feedback_heading") {
+                Text(
+                    text = "FOOD & SERVICE FEEDBACK (${feedbackList.size})",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+            items(feedbackList, key = { "fb_${it.id}" }) { entry ->
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = entry.customerName.ifBlank { entry.customerEmail.ifBlank { "Lahori Customer" } },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = entry.branchName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = LahoriRed
+                                )
+                            }
+                            IconButton(
+                                onClick = { onDeleteFeedback(entry.id) },
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .testTag("delete_feedback_${entry.id}")
+                            ) {
+                                Icon(Icons.Filled.DeleteOutline, contentDescription = "Delete feedback", tint = LahoriRed)
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Surface(color = LahoriGold.copy(alpha = 0.2f), shape = RoundedCornerShape(6.dp)) {
+                                Text(
+                                    text = "Food ${entry.foodRating}/5 ★",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                            Surface(color = LahoriRed.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp)) {
+                                Text(
+                                    text = "Service ${entry.serviceRating}/5 ★",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LahoriRed,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        if (entry.comment.isNotBlank()) {
+                            Text(
+                                text = "\"${entry.comment}\"",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Text(
+                            text = formatOrderDate(entry.createdAt),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 private fun BranchManagementTab(
     branches: List<CafeBranch>,
     branchAdmins: List<BranchAdminEntry>,
@@ -636,6 +839,10 @@ private fun BranchManagementTab(
         areas: List<String>,
         active: Boolean,
         sortOrder: Long?,
+        latitude: Double,
+        longitude: Double,
+        mapUrl: String,
+        openHours: String,
         onDone: (String) -> Unit
     ) -> Unit,
     onDeleteBranch: (String) -> Unit,
@@ -646,6 +853,10 @@ private fun BranchManagementTab(
     var shortLabel by remember { mutableStateOf("") }
     var shortAddress by remember { mutableStateOf("") }
     var areasInput by remember { mutableStateOf("") }
+    var openHoursInput by remember { mutableStateOf("12:00 PM - 2:00 AM") }
+    var mapUrlInput by remember { mutableStateOf("") }
+    var latInput by remember { mutableStateOf("") }
+    var lngInput by remember { mutableStateOf("") }
     var active by remember { mutableStateOf(true) }
     var validationError by remember { mutableStateOf<String?>(null) }
     var savedBanner by remember { mutableStateOf<String?>(null) }
@@ -657,6 +868,10 @@ private fun BranchManagementTab(
         shortLabel = ""
         shortAddress = ""
         areasInput = ""
+        openHoursInput = "12:00 PM - 2:00 AM"
+        mapUrlInput = ""
+        latInput = ""
+        lngInput = ""
         active = true
         validationError = null
     }
@@ -749,12 +964,51 @@ private fun BranchManagementTab(
                         value = areasInput,
                         onValueChange = { areasInput = it; validationError = null; savedBanner = null },
                         label = { Text("Delivery Zones (comma-separated)") },
-                        placeholder = { Text("e.g. Johar Town, Wapda Town, Township") },
+                        placeholder = { Text("e.g. Taranda Muhammad Panah, TMP, Main KLP Road") },
                         maxLines = 2,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("branch_areas_input")
                     )
+
+                    OutlinedTextField(
+                        value = openHoursInput,
+                        onValueChange = { openHoursInput = it; validationError = null; savedBanner = null },
+                        label = { Text("Operating Hours") },
+                        placeholder = { Text("e.g. 12:00 PM - 2:00 AM") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = mapUrlInput,
+                        onValueChange = { mapUrlInput = it; validationError = null; savedBanner = null },
+                        label = { Text("Google Maps Share Link (optional)") },
+                        placeholder = { Text("https://share.google/...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = latInput,
+                            onValueChange = { latInput = it; validationError = null; savedBanner = null },
+                            label = { Text("Latitude") },
+                            placeholder = { Text("29.1003") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = lngInput,
+                            onValueChange = { lngInput = it; validationError = null; savedBanner = null },
+                            label = { Text("Longitude") },
+                            placeholder = { Text("70.9080") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -817,6 +1071,10 @@ private fun BranchManagementTab(
                                 val cleanLabel = shortLabel.trim().ifBlank { cleanName.substringAfter("— ").trim() }
                                 val cleanAddress = shortAddress.trim()
                                 val parsedAreas = areasInput.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                                val parsedLat = latInput.trim().toDoubleOrNull() ?: 0.0
+                                val parsedLng = lngInput.trim().toDoubleOrNull() ?: 0.0
+                                val cleanHours = openHoursInput.trim().ifBlank { "12:00 PM - 2:00 AM" }
+                                val cleanMapUrl = mapUrlInput.trim()
 
                                 when {
                                     cleanName.length < 2 -> validationError = "Enter a branch name (at least 2 characters)."
@@ -826,7 +1084,19 @@ private fun BranchManagementTab(
                                         validationError = null
                                         val isUpdate = editingBranchId != null
                                         val sortOrder = editingBranchId?.let { id -> branches.firstOrNull { it.id == id }?.sortOrder }
-                                        onSaveBranch(editingBranchId, cleanName, cleanLabel, cleanAddress, parsedAreas, active, sortOrder) { savedId ->
+                                        onSaveBranch(
+                                            editingBranchId,
+                                            cleanName,
+                                            cleanLabel,
+                                            cleanAddress,
+                                            parsedAreas,
+                                            active,
+                                            sortOrder,
+                                            parsedLat,
+                                            parsedLng,
+                                            cleanMapUrl,
+                                            cleanHours
+                                        ) { savedId ->
                                             resetForm()
                                             savedBanner = if (isUpdate) {
                                                 "Updated $cleanLabel ($savedId)"
@@ -952,6 +1222,10 @@ private fun BranchManagementTab(
                                     shortLabel = branch.shortLabel
                                     shortAddress = branch.shortAddress
                                     areasInput = branch.areas.joinToString(", ")
+                                    openHoursInput = branch.openHours.ifBlank { "12:00 PM - 2:00 AM" }
+                                    mapUrlInput = branch.mapUrl
+                                    latInput = if (branch.latitude != 0.0) branch.latitude.toString() else ""
+                                    lngInput = if (branch.longitude != 0.0) branch.longitude.toString() else ""
                                     active = branch.active
                                     validationError = null
                                     savedBanner = null
@@ -1371,7 +1645,9 @@ fun BranchAdminDashboardScreen(
     onBack: () -> Unit = {},
     managerEmail: String = "",
     onSignOut: (() -> Unit)? = null,
-    branches: List<CafeBranch> = BranchDirectory.defaultBranches
+    branches: List<CafeBranch> = BranchDirectory.defaultBranches,
+    newOrderAlert: CafeOrder? = null,
+    onDismissNewOrderAlert: () -> Unit = {}
 ) {
     val isRestrictedRootMode = onSignOut != null
     if (!isRestrictedRootMode) {
@@ -1506,6 +1782,64 @@ fun BranchAdminDashboardScreen(
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
+                        item(key = "branch_new_order_alert") {
+                            AnimatedVisibility(visible = newOrderAlert != null) {
+                                newOrderAlert?.let { incoming ->
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = LahoriBlack,
+                                        border = BorderStroke(2.dp, LahoriGold),
+                                        shadowElevation = 6.dp,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("branch_new_order_alert_card")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(14.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.NotificationsActive,
+                                                contentDescription = null,
+                                                tint = LahoriGold,
+                                                modifier = Modifier.size(26.dp)
+                                            )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "NEW ORDER RECEIVED • #${incoming.id.takeLast(6).uppercase()}",
+                                                    style = MaterialTheme.typography.labelLarge,
+                                                    color = LahoriGold
+                                                )
+                                                Text(
+                                                    text = "${incoming.customerName} (${incoming.orderType}) • ${formatPkr(incoming.totalPkr)}",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    color = LahoriWhite
+                                                )
+                                                Text(
+                                                    text = incoming.itemsSummary,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = LahoriWhite.copy(alpha = 0.85f)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = onDismissNewOrderAlert,
+                                                modifier = Modifier.size(40.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Close,
+                                                    contentDescription = "Dismiss new order alert",
+                                                    tint = LahoriWhite
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         item(key = "branch_orders_header") {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Surface(

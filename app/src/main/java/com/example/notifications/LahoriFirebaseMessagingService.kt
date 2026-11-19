@@ -21,7 +21,11 @@ data class FcmOrderPushEvent(
     val orderId: String,
     val status: OrderStatus,
     val title: String,
-    val body: String
+    val body: String,
+    val eventType: String = OrderNotificationHelper.EVENT_ORDER_STATUS,
+    val branchId: String = "",
+    val branchName: String = "",
+    val itemsSummary: String = ""
 )
 
 object FcmOrderEventBus {
@@ -51,21 +55,37 @@ class LahoriFirebaseMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         super.onMessageReceived(remoteMessage)
         val data = remoteMessage.data
+        val eventType = data["eventType"] ?: OrderNotificationHelper.EVENT_ORDER_STATUS
+        val isNewOrder = eventType.equals(OrderNotificationHelper.EVENT_NEW_ORDER, ignoreCase = true)
         val orderId = data["orderId"].orEmpty()
         val statusRaw = data["status"].orEmpty()
-        val orderType = data["orderType"] ?: OrderType.PICKUP.name
+        val orderType = data["orderType"] ?: if (isNewOrder) OrderType.DELIVERY.name else OrderType.PICKUP.name
+        val branchId = data["branchId"].orEmpty()
         val branchName = data["branchName"].orEmpty()
+        val customerName = data["customerName"].orEmpty()
+        val totalPkr = data["totalPkr"]?.toLongOrNull() ?: 0L
         val itemsSummary = data["itemsSummary"].orEmpty()
 
-        val resolvedStatus = OrderStatus.fromString(
-            statusRaw.ifBlank { OrderStatus.Dispatched.name }
-        )
+        val resolvedStatus = if (isNewOrder) {
+            OrderStatus.fromString(statusRaw.ifBlank { OrderStatus.Confirmed.name })
+        } else {
+            OrderStatus.fromString(statusRaw.ifBlank { OrderStatus.Dispatched.name })
+        }
+        val shortId = orderId.takeLast(6).uppercase()
         val title = remoteMessage.notification?.title
             ?: data["title"]
-            ?: "Lahori Food Cafe — ${resolvedStatus.notificationTitleFor(orderType)}"
+            ?: if (isNewOrder) {
+                "New Order #$shortId"
+            } else {
+                "Lahori Food Cafe — ${resolvedStatus.notificationTitleFor(orderType)}"
+            }
         val body = remoteMessage.notification?.body
             ?: data["body"]
-            ?: resolvedStatus.notificationMessageFor(orderType)
+            ?: if (isNewOrder) {
+                "${customerName.ifBlank { "Customer" }} • ${itemsSummary.ifBlank { "New branch order" }}"
+            } else {
+                resolvedStatus.notificationMessageFor(orderType)
+            }
 
         OrderNotificationHelper.notifyRemoteMessage(
             context = applicationContext,
@@ -75,7 +95,11 @@ class LahoriFirebaseMessagingService : FirebaseMessagingService() {
             orderType = orderType,
             statusRaw = statusRaw,
             branchName = branchName,
-            itemsSummary = itemsSummary
+            itemsSummary = itemsSummary,
+            eventType = eventType,
+            branchId = branchId,
+            customerName = customerName,
+            totalPkr = totalPkr
         )
 
         if (orderId.isNotBlank()) {
@@ -84,7 +108,11 @@ class LahoriFirebaseMessagingService : FirebaseMessagingService() {
                     orderId = orderId,
                     status = resolvedStatus,
                     title = title,
-                    body = body
+                    body = body,
+                    eventType = eventType,
+                    branchId = branchId,
+                    branchName = branchName,
+                    itemsSummary = itemsSummary
                 )
             )
         }

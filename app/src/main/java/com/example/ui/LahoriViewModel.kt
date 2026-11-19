@@ -58,6 +58,10 @@ data class SharedSessionState(
     val selectedBranchId: String = BranchDirectory.branch1.id,
     val selectedAddressLabel: String = "",
     val selectedAddressStreet: String = "",
+    val deviceLatitude: Double? = null,
+    val deviceLongitude: Double? = null,
+    val detectedGpsAddress: String = "",
+    val detectedGpsArea: String = "",
     val guestAddresses: List<SavedAddress> = emptyList(),
     val guestFavorites: Set<String> = emptySet(),
     val guestSessionId: String = "guest_${UUID.randomUUID().toString().take(8)}",
@@ -67,6 +71,7 @@ data class SharedSessionState(
 ) {
     val totalItemCount: Int get() = cartItems.sumOf { it.quantity }
     val subtotalPkr: Long get() = cartItems.sumOf { it.lineTotalPkr }
+    val hasGpsFix: Boolean get() = deviceLatitude != null && deviceLongitude != null
 }
 
 class SessionCartController {
@@ -119,6 +124,48 @@ class SessionCartController {
         _state.value = _state.value.copy(
             orderType = OrderType.PICKUP,
             selectedBranchId = branchId
+        )
+    }
+
+    fun applyDetectedGpsLocation(
+        latitude: Double,
+        longitude: Double,
+        formattedAddress: String,
+        areaLabel: String,
+        nearestBranchId: String,
+        keepOrderType: Boolean = true
+    ) {
+        val current = _state.value
+        _state.value = current.copy(
+            orderType = if (keepOrderType) current.orderType else OrderType.DELIVERY,
+            selectedBranchId = nearestBranchId,
+            selectedAddressLabel = areaLabel.ifBlank { "GPS Location" },
+            selectedAddressStreet = formattedAddress,
+            deviceLatitude = latitude,
+            deviceLongitude = longitude,
+            detectedGpsAddress = formattedAddress,
+            detectedGpsArea = areaLabel
+        )
+    }
+
+    fun selectQuickDeliveryArea(
+        area: String,
+        branchId: String
+    ) {
+        _state.value = _state.value.copy(
+            orderType = OrderType.DELIVERY,
+            selectedBranchId = branchId,
+            selectedAddressLabel = area,
+            selectedAddressStreet = area
+        )
+    }
+
+    fun clearGpsLocation() {
+        _state.value = _state.value.copy(
+            deviceLatitude = null,
+            deviceLongitude = null,
+            detectedGpsAddress = "",
+            detectedGpsArea = ""
         )
     }
 
@@ -214,12 +261,22 @@ class LahoriViewModel(
     private val _fcmTokenRegistered = MutableStateFlow(false)
     val fcmTokenRegistered: StateFlow<Boolean> = _fcmTokenRegistered.asStateFlow()
 
+    private val _newBranchOrderAlert = MutableStateFlow<CafeOrder?>(null)
+    val newBranchOrderAlert: StateFlow<CafeOrder?> = _newBranchOrderAlert.asStateFlow()
+
     @Volatile
     private var currentFcmToken: String? = null
+
+    @Volatile
+    private var subscribedBranchTopic: String? = null
 
     private val lastSeenOrderStatuses = mutableMapOf<String, OrderStatus>()
     private val handledSurveyOrderIds = mutableSetOf<String>()
     private var initialOrderLoadComplete = false
+
+    private val seenBranchOrderIds = mutableSetOf<String>()
+    private var initialBranchOrderLoadComplete = false
+    private var lastObservedBranchId: String? = null
 
     val branchesList: StateFlow<List<CafeBranch>> = repository.observeBranches()
         .map { branches -> branches.ifEmpty { BranchDirectory.defaultBranches } }
@@ -357,10 +414,21 @@ class LahoriViewModel(
     val branchOrdersState: StateFlow<UiState<List<CafeOrder>>> = branchAdminAssignment
         .flatMapLatest { assignment ->
             if (assignment == null || currentUserEmail.isBlank()) {
+                seenBranchOrderIds.clear()
+                initialBranchOrderLoadComplete = false
+                lastObservedBranchId = null
                 flowOf(UiState.Success(emptyList()))
             } else {
+                if (lastObservedBranchId != assignment.branchId) {
+                    seenBranchOrderIds.clear()
+                    initialBranchOrderLoadComplete = false
+                    lastObservedBranchId = assignment.branchId
+                }
                 repository.observeBranchOrders(assignment.branchId)
-                    .map<List<CafeOrder>, UiState<List<CafeOrder>>> { UiState.Success(it) }
+                    .map<List<CafeOrder>, UiState<List<CafeOrder>>> { orders ->
+                        detectBranchNewOrders(orders)
+                        UiState.Success(orders)
+                    }
                     .catch { error ->
                         val firestoreError = unwrapFirestoreException(error)
                         if (firestoreError == null && error is CancellationException) throw error
@@ -439,6 +507,22 @@ class LahoriViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
+    @Suppress("OPT_IN_USAGE")
+    val allFeedback: StateFlow<List<CafeFeedback>> = effectiveRole
+        .flatMapLatest { role ->
+            if (role != UserRole.SuperAdmin) {
+                flowOf(emptyList())
+            } else {
+                repository.observeAllFeedback()
+                    .catch { error ->
+                        val firestoreError = unwrapFirestoreException(error)
+                        if (firestoreError == null && error is CancellationException) throw error
+                        emit(emptyList())
+                    }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
     init {
         viewModelScope.launch {
             repository.ensureUserProfile()
@@ -475,6 +559,38 @@ class LahoriViewModel(
             syncFcmRegistrationToken()
         }
 
+        // Sync FCM topic subscription for BranchAdmin push notifications on new orders
+        viewModelScope.launch {
+            branchAdminAssignment.collect { assignment ->
+                val targetTopic = if (!isSuperAdminByEmail && assignment != null) {
+                    "branch_${sanitizeTopicSegment(assignment.branchId)}_orders"
+                } else {
+                    null
+                }
+                val previous = subscribedBranchTopic
+                if (previous != null && previous != targetTopic) {
+                    try {
+                        Firebase.messaging.unsubscribeFromTopic(previous).await()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "FCM topic unsubscribe skipped: ${e.message}")
+                    }
+                    subscribedBranchTopic = null
+                }
+                if (targetTopic != null && subscribedBranchTopic != targetTopic) {
+                    try {
+                        Firebase.messaging.subscribeToTopic(targetTopic).await()
+                        subscribedBranchTopic = targetTopic
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "FCM topic subscribe skipped: ${e.message}")
+                    }
+                }
+            }
+        }
+
         // Trigger post-delivery rating survey automatically when a Delivered order has no review yet
         viewModelScope.launch {
             combine(customerOrdersState, customerReviewsState) { ordersUi, reviewsUi ->
@@ -483,7 +599,7 @@ class LahoriViewModel(
                 if (ordersUi is UiState.Success && reviewsUi is UiState.Success && _pendingSurveyOrder.value == null) {
                     val reviewedIds = reviewsUi.data.mapTo(mutableSetOf()) { it.orderId }
                     val candidate = ordersUi.data.firstOrNull { order ->
-                        order.status == OrderStatus.Delivered.name &&
+                        OrderStatus.fromString(order.status) == OrderStatus.Delivered &&
                             !reviewedIds.contains(order.id) &&
                             !handledSurveyOrderIds.contains(order.id)
                     }
@@ -518,9 +634,32 @@ class LahoriViewModel(
         }
     }
 
+    private fun detectBranchNewOrders(orders: List<CafeOrder>) {
+        if (!initialBranchOrderLoadComplete) {
+            orders.forEach { seenBranchOrderIds.add(it.id) }
+            initialBranchOrderLoadComplete = true
+            return
+        }
+        val incoming = orders.filter {
+            !seenBranchOrderIds.contains(it.id) &&
+                OrderStatus.fromString(it.status) == OrderStatus.Confirmed
+        }
+        orders.forEach { seenBranchOrderIds.add(it.id) }
+        val newest = incoming.firstOrNull()
+        if (newest != null) {
+            _newBranchOrderAlert.value = newest
+        }
+    }
+
+    fun dismissNewBranchOrderAlert() {
+        _newBranchOrderAlert.value = null
+    }
+
     fun openOrderSurvey(order: CafeOrder) {
-        if (order.status == OrderStatus.Delivered.name) {
+        if (OrderStatus.fromString(order.status) == OrderStatus.Delivered) {
             _pendingSurveyOrder.value = order
+        } else {
+            _actionError.value = "You can rate an order once it is delivered."
         }
     }
 
@@ -550,6 +689,15 @@ class LahoriViewModel(
         }
     }
 
+    fun deleteReview(reviewId: String) {
+        viewModelScope.launch {
+            val res = repository.deleteReview(reviewId)
+            if (res.isFailure) {
+                _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Failed to delete review"
+            }
+        }
+    }
+
     fun submitCafeFeedback(
         branchId: String,
         foodRating: Int,
@@ -571,6 +719,15 @@ class LahoriViewModel(
                 onSuccess()
             }.onFailure { err ->
                 _actionError.value = err.localizedMessage ?: "Failed to submit feedback"
+            }
+        }
+    }
+
+    fun deleteFeedback(feedbackId: String) {
+        viewModelScope.launch {
+            val res = repository.deleteFeedback(feedbackId)
+            if (res.isFailure) {
+                _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Failed to delete feedback"
             }
         }
     }
@@ -608,6 +765,13 @@ class LahoriViewModel(
 
     suspend fun unregisterDeviceFcmToken() {
         try {
+            subscribedBranchTopic?.let { topic ->
+                try {
+                    Firebase.messaging.unsubscribeFromTopic(topic).await()
+                } catch (_: Exception) {
+                }
+                subscribedBranchTopic = null
+            }
             val token = currentFcmToken ?: Firebase.messaging.token.await()
             if (!token.isNullOrBlank()) {
                 repository.unregisterFcmToken(token)
@@ -659,10 +823,11 @@ class LahoriViewModel(
         onSuccess: (String) -> Unit
     ) {
         val s = sessionCart.state.value
+        val selectedBranch = BranchDirectory.byId(s.selectedBranchId, branchesList.value)
         val addressText = if (s.orderType == OrderType.DELIVERY) {
-            s.selectedAddressStreet.ifBlank { "Lahore Delivery" }
+            s.selectedAddressStreet.ifBlank { "${selectedBranch.displayShortLabel()} Delivery" }
         } else {
-            "Self Pickup — ${BranchDirectory.byId(s.selectedBranchId, branchesList.value).shortAddress}"
+            "Self Pickup — ${selectedBranch.shortAddress}"
         }
         viewModelScope.launch {
             val res = repository.placeOrder(
@@ -772,6 +937,11 @@ class LahoriViewModel(
         areas: List<String>,
         active: Boolean,
         sortOrder: Long? = null,
+        latitude: Double = 0.0,
+        longitude: Double = 0.0,
+        mapUrl: String = "",
+        openHours: String = "12:00 PM - 2:00 AM",
+        deliveryRadiusKm: Long = 15L,
         onDone: (String) -> Unit
     ) {
         if (_isSavingBranch.value) return
@@ -784,7 +954,12 @@ class LahoriViewModel(
                 shortAddress = shortAddress,
                 areas = areas,
                 active = active,
-                sortOrder = sortOrder
+                sortOrder = sortOrder,
+                latitude = latitude,
+                longitude = longitude,
+                mapUrl = mapUrl,
+                openHours = openHours,
+                deliveryRadiusKm = deliveryRadiusKm
             )
             _isSavingBranch.value = false
             res.onSuccess { savedId -> onDone(savedId) }.onFailure { err ->
@@ -861,6 +1036,9 @@ class LahoriViewModel(
             }
         }
     }
+
+    private fun sanitizeTopicSegment(raw: String): String =
+        raw.trim().replace(Regex("[^a-zA-Z0-9\\-_.~%]"), "_").ifBlank { "default" }
 
     private fun unwrapFirestoreException(error: Throwable): FirebaseFirestoreException? =
         generateSequence(error) { it.cause }

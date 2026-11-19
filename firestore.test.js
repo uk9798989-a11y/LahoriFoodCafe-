@@ -146,9 +146,9 @@ test("Order isolation, guest checkout payload, and BranchAdmin scoping", async (
     customerEmail: "custA@gmail.com",
     customerPhone: "03001234567",
     orderType: "DELIVERY",
-    deliveryAddress: "14-B Gulberg III, Lahore",
+    deliveryAddress: "Main KLP Road, Taranda Muhammad Panah",
     branchId: "branch_1",
-    branchName: "Lahori Cafe Gulberg",
+    branchName: "Lahori Food Cafe — Taranda Muhammad Panah",
     branchAdminEmails: [BRANCH_1_EMAIL],
     items: [{ itemId: "zinger_1", name: "Zinger Burger", quantity: 2, unitPricePkr: 650, lineTotalPkr: 1300 }],
     itemsSummary: "2x Zinger Burger",
@@ -174,7 +174,7 @@ test("Order isolation, guest checkout payload, and BranchAdmin scoping", async (
       email: BRANCH_1_EMAIL,
       role: "BranchAdmin",
       branchId: "branch_1",
-      branchName: "Lahori Cafe Gulberg",
+      branchName: "Lahori Food Cafe — Taranda Muhammad Panah",
       createdAt: now,
       updatedAt: now,
     })
@@ -224,9 +224,9 @@ test("Reviews: Customer can review only own Delivered order; cross-user access d
     customerEmail: "custA@gmail.com",
     customerPhone: "03001234567",
     orderType: "DELIVERY",
-    deliveryAddress: "14-B Gulberg III, Lahore",
+    deliveryAddress: "Main KLP Road, Taranda Muhammad Panah",
     branchId: "branch_1",
-    branchName: "Lahori Cafe Gulberg",
+    branchName: "Lahori Food Cafe — Taranda Muhammad Panah",
     branchAdminEmails: [],
     items: [{ itemId: "zinger_1", name: "Zinger Burger", quantity: 1, unitPricePkr: 650, lineTotalPkr: 650 }],
     itemsSummary: "1x Zinger Burger",
@@ -247,7 +247,7 @@ test("Reviews: Customer can review only own Delivered order; cross-user access d
     userId: CUSTOMER_A,
     customerName: "Ali",
     branchId: "branch_1",
-    branchName: "Lahori Cafe Gulberg",
+    branchName: "Lahori Food Cafe — Taranda Muhammad Panah",
     rating: 5,
     comment: "Crispy and hot!",
     itemsSummary: "1x Zinger Burger",
@@ -255,14 +255,22 @@ test("Reviews: Customer can review only own Delivered order; cross-user access d
     updatedAt: now,
   };
 
+  // Non-existent review pre-check get() succeeds without throwing PERMISSION_DENIED
+  await assertSucceeds(custADb.collection("reviews").doc("order_rev_1").get());
+
   // Denied while order is still Confirmed
   await assertFails(custADb.collection("reviews").doc("order_rev_1").set(reviewPayload));
 
   // Mark order Delivered
   await assertSucceeds(superDb.collection("orders").doc("order_rev_1").update({ status: "Delivered", updatedAt: new Date(Date.now() - 1000) }));
 
-  // Customer A can submit review; Customer B cannot read or overwrite it
+  // Customer A can submit and update review; Customer B cannot read or overwrite existing review
   await assertSucceeds(custADb.collection("reviews").doc("order_rev_1").set(reviewPayload));
+  await assertSucceeds(custADb.collection("reviews").doc("order_rev_1").update({
+    rating: 4,
+    comment: "Updated rating",
+    updatedAt: new Date(Date.now() - 500),
+  }));
   await assertSucceeds(custADb.collection("reviews").where("userId", "==", CUSTOMER_A).get());
   await assertFails(custBDb.collection("reviews").doc("order_rev_1").get());
   await assertFails(custBDb.collection("reviews").get());
@@ -330,7 +338,7 @@ test("Feedback: Owner can submit food & service ratings and query own feedback; 
     customerName: "Ali Customer",
     customerEmail: "custA@gmail.com",
     branchId: "branch_1",
-    branchName: "Lahori Food Cafe — Gulberg III",
+    branchName: "Lahori Food Cafe — Taranda Muhammad Panah",
     foodRating: 5,
     serviceRating: 4,
     comment: "Crispy zinger and super polite staff!",
@@ -368,10 +376,15 @@ test("Multi-branch scalability: SuperAdmin manages unlimited branches & multiple
   const now = new Date(Date.now() - 2000);
 
   const branch10Payload = {
-    name: "Lahori Food Cafe — Bahria Orchard",
-    shortLabel: "Branch 10 (Bahria)",
-    shortAddress: "Commercial Hub, Bahria Orchard, Lahore",
-    areas: ["Bahria Orchard", "Raiwind Road"],
+    name: "Lahori Food Cafe — Khanpur Bypass",
+    shortLabel: "Branch 10 (Khanpur)",
+    shortAddress: "Bypass Chowk, Khanpur, Rahim Yar Khan",
+    areas: ["Khanpur", "Bypass Road"],
+    latitude: 28.6478,
+    longitude: 70.6562,
+    mapUrl: "https://share.google/exampleKhanpur",
+    openHours: "12:00 PM - 2:00 AM",
+    deliveryRadiusKm: 15,
     active: true,
     sortOrder: 10,
     createdAt: now,
@@ -387,23 +400,23 @@ test("Multi-branch scalability: SuperAdmin manages unlimited branches & multiple
   // Assign multiple admins to branch_1 and an admin to dynamic branch_10
   await assertFails(
     custADb.collection("branch_admins").doc(BRANCH_1_EMAIL).set({
-      email: BRANCH_1_EMAIL, role: "BranchAdmin", branchId: "branch_1", branchName: "Gulberg", createdAt: now, updatedAt: now,
+      email: BRANCH_1_EMAIL, role: "BranchAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe TMP", createdAt: now, updatedAt: now,
     })
   );
   await assertFails(
     superDb.collection("branch_admins").doc(BRANCH_1_EMAIL).set({
-      email: BRANCH_1_EMAIL, role: "SuperAdmin", branchId: "branch_1", branchName: "Gulberg", createdAt: now, updatedAt: now,
+      email: BRANCH_1_EMAIL, role: "SuperAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe TMP", createdAt: now, updatedAt: now,
     })
   );
 
   await assertSucceeds(
     superDb.collection("branch_admins").doc(BRANCH_1_EMAIL).set({
-      email: BRANCH_1_EMAIL, role: "BranchAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe — Gulberg III", createdAt: now, updatedAt: now,
+      email: BRANCH_1_EMAIL, role: "BranchAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe — Taranda Muhammad Panah", createdAt: now, updatedAt: now,
     })
   );
   await assertSucceeds(
     superDb.collection("branch_admins").doc("branch1.shift2@gmail.com").set({
-      email: "branch1.shift2@gmail.com", role: "BranchAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe — Gulberg III", createdAt: now, updatedAt: now,
+      email: "branch1.shift2@gmail.com", role: "BranchAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe — Taranda Muhammad Panah", createdAt: now, updatedAt: now,
     })
   );
   await assertSucceeds(
@@ -440,7 +453,7 @@ test("Multi-branch scalability: SuperAdmin manages unlimited branches & multiple
     updatedAt: now,
   };
 
-  await assertSucceeds(custADb.collection("orders").doc("ord_b1").set({ ...baseOrder, branchId: "branch_1", branchName: "Lahori Food Cafe — Gulberg III" }));
+  await assertSucceeds(custADb.collection("orders").doc("ord_b1").set({ ...baseOrder, branchId: "branch_1", branchName: "Lahori Food Cafe — Taranda Muhammad Panah" }));
   await assertSucceeds(custADb.collection("orders").doc("ord_b10").set({ ...baseOrder, branchId: "branch_10", branchName: branch10Payload.name }));
 
   // Both branch_1 admins see branch_1 order immediately (even without branchAdminEmails backfill); CANNOT see branch_10

@@ -48,6 +48,11 @@ data class RewardVoucher(
     val requiredPoints: Int
 )
 
+fun calculateLoyaltyPoints(orders: List<CafeOrder>): Int {
+    val totalSpentPkr = orders.sumOf { it.totalPkr }
+    return ((totalSpentPkr / 100L) * 5L).toInt()
+}
+
 @Composable
 fun RewardsScreen(
     orders: List<CafeOrder>,
@@ -55,8 +60,7 @@ fun RewardsScreen(
     onApplyVoucher: (title: String, discountPkr: Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val totalSpentPkr = orders.sumOf { it.totalPkr }
-    val earnedPoints = ((totalSpentPkr / 100L) * 5L).toInt() + 150 // 150 welcome bonus points
+    val earnedPoints = calculateLoyaltyPoints(orders)
     val tier = when {
         earnedPoints >= 1000 -> "LAHORI LEGEND"
         earnedPoints >= 500 -> "SPICE MASTER"
@@ -66,7 +70,7 @@ fun RewardsScreen(
     val progress = (earnedPoints.toFloat() / nextTierPoints.toFloat()).coerceIn(0f, 1f)
 
     val vouchers = listOf(
-        RewardVoucher("WELCOME100", "Rs. 100 Off Bucket", "Valid on any Zinger, Pizza or Wings order", 100L, 100),
+        RewardVoucher("WELCOME100", "Rs. 100 Off Bucket", "Unlock at 100 pts (Rs. 2,000 spent across orders)", 100L, 100),
         RewardVoucher("CRUNCH200", "Rs. 200 Off Feast", "Unlock at 300 Lahori Crunch Points", 200L, 300),
         RewardVoucher("KING350", "Rs. 350 Royal Discount", "Unlock at 600 Lahori Crunch Points", 350L, 600)
     )
@@ -134,7 +138,11 @@ fun RewardsScreen(
                     )
 
                     Text(
-                        text = "Earn 5 points per Rs. 100 ordered • ${nextTierPoints - earnedPoints.coerceAtMost(nextTierPoints)} pts to next tier",
+                        text = if (earnedPoints == 0) {
+                            "Order to earn 5 pts per Rs. 100 spent • $nextTierPoints pts to next tier"
+                        } else {
+                            "Earn 5 points per Rs. 100 ordered • ${nextTierPoints - earnedPoints.coerceAtMost(nextTierPoints)} pts to next tier"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = LahoriWhite.copy(alpha = 0.85f)
                     )

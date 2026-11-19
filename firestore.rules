@@ -70,6 +70,11 @@ service cloud.firestore {
              data.shortAddress is string && data.shortAddress.size() >= 3 && data.shortAddress.size() <= 160 &&
              data.areas is list && data.areas.size() <= 30 &&
              (data.areas.size() == 0 || data.areas[0] is string) &&
+             (!('latitude' in data) || (data.latitude is number && data.latitude >= -90 && data.latitude <= 90)) &&
+             (!('longitude' in data) || (data.longitude is number && data.longitude >= -180 && data.longitude <= 180)) &&
+             (!('mapUrl' in data) || (data.mapUrl is string && data.mapUrl.size() <= 300)) &&
+             (!('openHours' in data) || (data.openHours is string && data.openHours.size() <= 60)) &&
+             (!('deliveryRadiusKm' in data) || (data.deliveryRadiusKm is int && data.deliveryRadiusKm >= 1 && data.deliveryRadiusKm <= 100)) &&
              data.active is bool &&
              data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 10000;
     }
@@ -183,7 +188,7 @@ service cloud.firestore {
       allow create: if isSuperAdmin() &&
                        isValidBranchId(branchId) &&
                        incoming().keys().hasAll(['name', 'shortLabel', 'shortAddress', 'areas', 'active', 'sortOrder', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['name', 'shortLabel', 'shortAddress', 'areas', 'active', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['name', 'shortLabel', 'shortAddress', 'areas', 'latitude', 'longitude', 'mapUrl', 'openHours', 'deliveryRadiusKm', 'active', 'sortOrder', 'createdAt', 'updatedAt']) &&
                        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
                        isValidBranch(incoming());
@@ -193,7 +198,7 @@ service cloud.firestore {
                        isValidBranch(incoming()) &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'shortLabel', 'shortAddress', 'areas', 'active', 'sortOrder', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'shortLabel', 'shortAddress', 'areas', 'latitude', 'longitude', 'mapUrl', 'openHours', 'deliveryRadiusKm', 'active', 'sortOrder', 'updatedAt']);
 
       allow delete: if isSuperAdmin() && isValidBranchId(branchId);
     }
@@ -416,6 +421,7 @@ service cloud.firestore {
       );
 
       allow get: if isSignedIn() && isValidId(reviewId) && (
+        resource == null ||
         resource.data.userId == request.auth.uid ||
         isSuperAdmin()
       );
@@ -455,6 +461,7 @@ service cloud.firestore {
       );
 
       allow get: if isSignedIn() && isValidId(feedbackId) && (
+        resource == null ||
         resource.data.userId == request.auth.uid ||
         isSuperAdmin()
       );

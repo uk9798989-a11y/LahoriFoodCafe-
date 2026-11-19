@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeliveryDining
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LocalMall
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Person
@@ -96,9 +97,17 @@ fun LahoriTopHeader(
     onSearchQueryChange: (String) -> Unit,
     onDeliveryClick: () -> Unit,
     onPickupClick: () -> Unit,
-    branches: List<CafeBranch> = BranchDirectory.defaultBranches
+    branches: List<CafeBranch> = BranchDirectory.defaultBranches,
+    deviceLatitude: Double? = null,
+    deviceLongitude: Double? = null,
+    onLocationBannerClick: (() -> Unit)? = null
 ) {
     val activeBranch = BranchDirectory.byId(selectedBranchId, branches)
+    val distanceKm = if (deviceLatitude != null && deviceLongitude != null) {
+        BranchDirectory.distanceToKm(activeBranch, deviceLatitude, deviceLongitude)
+    } else {
+        null
+    }
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -140,7 +149,18 @@ fun LahoriTopHeader(
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable {
+                                    onLocationBannerClick?.invoke() ?: if (orderType == OrderType.DELIVERY) {
+                                        onDeliveryClick()
+                                    } else {
+                                        onPickupClick()
+                                    }
+                                }
+                                .padding(vertical = 2.dp)
+                                .testTag("header_location_banner")
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.LocationOn,
@@ -148,16 +168,28 @@ fun LahoriTopHeader(
                                 tint = LahoriRed,
                                 modifier = Modifier.size(13.dp)
                             )
+                            val distanceSuffix = if (distanceKm != null) {
+                                " • ${String.format(java.util.Locale.US, "%.1f km", distanceKm)}"
+                            } else {
+                                ""
+                            }
                             Text(
                                 text = if (orderType == OrderType.DELIVERY && selectedAddressStreet.isNotBlank()) {
-                                    "${activeBranch.id.uppercase()} • $selectedAddressStreet"
+                                    "${activeBranch.displayShortLabel()}$distanceSuffix • $selectedAddressStreet"
                                 } else {
-                                    activeBranch.name
+                                    "${activeBranch.displayShortLabel()}$distanceSuffix"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            Icon(
+                                imageVector = Icons.Filled.KeyboardArrowDown,
+                                contentDescription = "Change branch or location",
+                                tint = LahoriRed,
+                                modifier = Modifier.size(15.dp)
                             )
                         }
                     }

@@ -3,6 +3,7 @@ package com.example
 import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BranchDirectoryTest {
@@ -33,8 +34,39 @@ class BranchDirectoryTest {
     }
 
     @Test
+    fun officialDefaultBranches_matchTmpAndZahirPirDetails() {
+        assertEquals("Lahori Food Cafe TMP", BranchDirectory.branch1.displayShortLabel())
+        assertEquals("https://share.google/P92yinaSqd7Dz0anJ", BranchDirectory.branch1.mapUrl)
+        assertEquals("Lahori Food Cafe Zahir Pir", BranchDirectory.branch2.displayShortLabel())
+        assertEquals("https://share.google/XrwRlyd2jYQs8wbzl", BranchDirectory.branch2.mapUrl)
+    }
+
+    @Test
+    fun routeAddressToBranch_routesZahirPirAndTmpCorrectly() {
+        val tmpRouted = BranchDirectory.routeAddressToBranch("Near Main KLP Road TMP")
+        assertEquals("branch_1", tmpRouted.id)
+
+        val zahirRouted = BranchDirectory.routeAddressToBranch("Zahir Pir M-5 Interchange Khanpur")
+        assertEquals("branch_2", zahirRouted.id)
+    }
+
+    @Test
+    fun nearestBranch_sortsTmpVsZahirPirByGpsCoordinates() {
+        // Near Taranda Muhammad Panah
+        val nearTmp = BranchDirectory.nearestBranch(29.105, 70.910)
+        assertEquals("branch_1", nearTmp.id)
+
+        // Near Zahir Pir
+        val nearZahir = BranchDirectory.nearestBranch(28.815, 70.528)
+        assertEquals("branch_2", nearZahir.id)
+
+        val sorted = BranchDirectory.branchesSortedByDistance(28.815, 70.528)
+        assertEquals("branch_2", sorted.first().first.id)
+        assertTrue((sorted[0].second ?: 999.0) < (sorted[1].second ?: 0.0))
+    }
+
+    @Test
     fun routeAddressToBranch_supportsUnlimitedBranchesAndLongestAreaMatch() {
-        // "Johar Town Expo" is more specific than "Johar Town" (on branch_2)
         val routed = BranchDirectory.routeAddressToBranch(
             areaOrAddress = "House 14, Johar Town Expo Block H",
             branches = twelveBranches
@@ -48,7 +80,6 @@ class BranchDirectoryTest {
             areaOrAddress = "Zone 7 Area Street 2",
             branches = twelveBranches
         )
-        // branch_7 is paused so it should not be returned; deterministic active fallback picks branch_1
         assertEquals("branch_1", routed.id)
     }
 

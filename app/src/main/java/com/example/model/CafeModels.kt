@@ -107,6 +107,11 @@ data class CafeBranch(
     val shortLabel: String = "",
     val shortAddress: String = "",
     val areas: List<String> = emptyList(),
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+    val mapUrl: String = "",
+    val openHours: String = "12:00 PM - 2:00 AM",
+    val deliveryRadiusKm: Long = 15L,
     val active: Boolean = true,
     val sortOrder: Long = 0L,
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -114,6 +119,8 @@ data class CafeBranch(
 ) {
     fun displayShortLabel(): String =
         shortLabel.ifBlank { name.substringAfter("— ").trim().ifBlank { id } }
+
+    fun hasCoordinates(): Boolean = latitude != 0.0 && longitude != 0.0
 }
 
 typealias BranchInfo = CafeBranch
@@ -121,20 +128,48 @@ typealias BranchInfo = CafeBranch
 object BranchDirectory {
     val branch1 = CafeBranch(
         id = "branch_1",
-        name = "Lahori Food Cafe — Gulberg III",
-        shortLabel = "Branch 1 (Gulberg)",
-        shortAddress = "MM Alam Road, Gulberg III, Lahore",
-        areas = listOf("Gulberg", "Model Town", "Garden Town", "Liberty", "Shadman", "Mall Road", "Muslim Town", "Ichhra"),
+        name = "Lahori Food Cafe — Taranda Muhammad Panah",
+        shortLabel = "Lahori Food Cafe TMP",
+        shortAddress = "Main KLP Road, Taranda Muhammad Panah (TMP), Rahim Yar Khan",
+        areas = listOf(
+            "Taranda Muhammad Panah",
+            "TMP",
+            "Main KLP Road",
+            "Basti",
+            "Allahabad Road",
+            "Feroza",
+            "Liaquatpur",
+            "Shafiabad"
+        ),
+        latitude = 29.1003,
+        longitude = 70.9080,
+        mapUrl = "https://share.google/P92yinaSqd7Dz0anJ",
+        openHours = "12:00 PM - 2:00 AM",
+        deliveryRadiusKm = 15L,
         active = true,
         sortOrder = 1L
     )
 
     val branch2 = CafeBranch(
         id = "branch_2",
-        name = "Lahori Food Cafe — DHA Phase 5",
-        shortLabel = "Branch 2 (DHA)",
-        shortAddress = "Commercial Sector Z, DHA Phase 5, Lahore",
-        areas = listOf("DHA", "Cantt", "Johar Town", "Bahria Town", "Wapda Town", "Cavalry Ground", "Askari", "Bedian"),
+        name = "Lahori Food Cafe — Zahir Pir",
+        shortLabel = "Lahori Food Cafe Zahir Pir",
+        shortAddress = "Main KLP Road / M-5 Interchange, Zahir Pir, Khanpur",
+        areas = listOf(
+            "Zahir Pir",
+            "Zahirpir",
+            "M-5 Interchange",
+            "Khanpur",
+            "Chachran Sharif",
+            "Nawan Kot",
+            "Sardarpur",
+            "Jajja Abbasian"
+        ),
+        latitude = 28.8124,
+        longitude = 70.5241,
+        mapUrl = "https://share.google/XrwRlyd2jYQs8wbzl",
+        openHours = "12:00 PM - 2:00 AM",
+        deliveryRadiusKm = 15L,
         active = true,
         sortOrder = 2L
     )
@@ -153,6 +188,50 @@ object BranchDirectory {
             ?: defaultBranches.firstOrNull { it.id == branchId }
         return found?.displayShortLabel() ?: branchId
     }
+
+    fun haversineDistanceKm(
+        lat1: Double,
+        lon1: Double,
+        lat2: Double,
+        lon2: Double
+    ): Double {
+        val earthRadiusKm = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2.0) * Math.sin(dLat / 2.0) +
+            Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+            Math.sin(dLon / 2.0) * Math.sin(dLon / 2.0)
+        val c = 2.0 * Math.atan2(Math.sqrt(a), Math.sqrt(1.0 - a))
+        return earthRadiusKm * c
+    }
+
+    fun distanceToKm(branch: CafeBranch, lat: Double, lng: Double): Double? {
+        if (!branch.hasCoordinates()) return null
+        return haversineDistanceKm(lat, lng, branch.latitude, branch.longitude)
+    }
+
+    fun branchesSortedByDistance(
+        lat: Double,
+        lng: Double,
+        branches: List<CafeBranch> = defaultBranches
+    ): List<Pair<CafeBranch, Double?>> {
+        val pool = branches.filter { it.active }.ifEmpty {
+            branches.ifEmpty { defaultBranches }
+        }
+        return pool.map { branch ->
+            branch to distanceToKm(branch, lat, lng)
+        }.sortedWith(
+            compareBy<Pair<CafeBranch, Double?>> { it.second ?: Double.MAX_VALUE }
+                .thenBy { it.first.sortOrder }
+        )
+    }
+
+    fun nearestBranch(
+        lat: Double,
+        lng: Double,
+        branches: List<CafeBranch> = defaultBranches
+    ): CafeBranch =
+        branchesSortedByDistance(lat, lng, branches).firstOrNull()?.first ?: branch1
 
     fun routeAddressToBranch(
         areaOrAddress: String,
@@ -181,14 +260,21 @@ object BranchDirectory {
             // Secondary match against branch shortLabel, name, or shortAddress
             val metaMatch = pool.firstOrNull { branch ->
                 branch.shortLabel.lowercase().let { it.isNotBlank() && normalized.contains(it) } ||
-                    branch.name.substringAfter("— ").lowercase().let { it.isNotBlank() && normalized.contains(it) }
+                    branch.name.substringAfter("— ").lowercase().let { it.isNotBlank() && normalized.contains(it) } ||
+                    branch.shortAddress.lowercase().let { it.isNotBlank() && normalized.contains(it) }
             }
             if (metaMatch != null) return metaMatch
         }
 
-        // Deterministic fallback
+        // Deterministic fallback for Zahir Pir corridor keywords
         val fallbackBranch2 = pool.firstOrNull { it.id == branch2.id }
-        if (fallbackBranch2 != null && (normalized.contains("phase") || normalized.contains("south") || normalized.contains("town"))) {
+        if (fallbackBranch2 != null && (
+                normalized.contains("zahir") ||
+                    normalized.contains("khanpur") ||
+                    normalized.contains("m-5") ||
+                    normalized.contains("chachran")
+                )
+        ) {
             return fallbackBranch2
         }
         return pool.firstOrNull() ?: branch1

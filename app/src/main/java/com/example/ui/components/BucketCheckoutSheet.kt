@@ -192,7 +192,9 @@ fun BucketCheckoutSheet(
                             )
                             Text(
                                 text = if (sessionState.orderType == OrderType.DELIVERY) {
-                                    sessionState.selectedAddressStreet.ifBlank { "Lahore Delivery (${branch.id})" }
+                                    sessionState.selectedAddressStreet.ifBlank {
+                                        "${branch.displayShortLabel()} Delivery • ${branch.shortAddress}"
+                                    }
                                 } else {
                                     branch.shortAddress
                                 },

@@ -96,26 +96,63 @@ class CafeRepository(
         val path = "branches"
         return try {
             requireUserId()
-            val existing = db.collection(path).limit(1).get().await()
-            if (!existing.isEmpty) return Result.success(Unit)
             val batch = db.batch()
-            BranchDirectory.defaultBranches.forEach { branch ->
+            var opsCount = 0
+            for (branch in BranchDirectory.defaultBranches) {
                 val docRef = db.collection(path).document(branch.id)
-                batch.set(
-                    docRef,
-                    mapOf(
-                        "name" to branch.name,
-                        "shortLabel" to branch.shortLabel,
-                        "shortAddress" to branch.shortAddress,
-                        "areas" to branch.areas,
-                        "active" to branch.active,
-                        "sortOrder" to branch.sortOrder,
-                        "createdAt" to FieldValue.serverTimestamp(),
-                        "updatedAt" to FieldValue.serverTimestamp()
+                val snap = docRef.get().await()
+                if (!snap.exists()) {
+                    batch.set(
+                        docRef,
+                        mapOf(
+                            "name" to branch.name,
+                            "shortLabel" to branch.shortLabel,
+                            "shortAddress" to branch.shortAddress,
+                            "areas" to branch.areas,
+                            "latitude" to branch.latitude,
+                            "longitude" to branch.longitude,
+                            "mapUrl" to branch.mapUrl,
+                            "openHours" to branch.openHours,
+                            "deliveryRadiusKm" to branch.deliveryRadiusKm,
+                            "active" to branch.active,
+                            "sortOrder" to branch.sortOrder,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
                     )
-                )
+                    opsCount++
+                } else {
+                    val existingName = snap.getString("name").orEmpty()
+                    val existingAddress = snap.getString("shortAddress").orEmpty()
+                    val existingMapUrl = snap.getString("mapUrl").orEmpty()
+                    val existingLat = snap.getDouble("latitude") ?: 0.0
+                    val isLegacyStarter = existingName.contains("Gulberg", ignoreCase = true) ||
+                        existingName.contains("DHA", ignoreCase = true) ||
+                        existingAddress.contains("MM Alam", ignoreCase = true) ||
+                        existingAddress.contains("Phase 5", ignoreCase = true)
+                    if (isLegacyStarter || existingMapUrl.isBlank() || existingLat == 0.0) {
+                        val updates = mutableMapOf<String, Any>(
+                            "latitude" to branch.latitude,
+                            "longitude" to branch.longitude,
+                            "mapUrl" to branch.mapUrl,
+                            "openHours" to branch.openHours,
+                            "deliveryRadiusKm" to branch.deliveryRadiusKm,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                        if (isLegacyStarter) {
+                            updates["name"] = branch.name
+                            updates["shortLabel"] = branch.shortLabel
+                            updates["shortAddress"] = branch.shortAddress
+                            updates["areas"] = branch.areas
+                        }
+                        batch.update(docRef, updates)
+                        opsCount++
+                    }
+                }
             }
-            batch.commit().await()
+            if (opsCount > 0) {
+                batch.commit().await()
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -132,7 +169,12 @@ class CafeRepository(
         shortAddress: String,
         areas: List<String>,
         active: Boolean,
-        sortOrder: Long? = null
+        sortOrder: Long? = null,
+        latitude: Double = 0.0,
+        longitude: Double = 0.0,
+        mapUrl: String = "",
+        openHours: String = "12:00 PM - 2:00 AM",
+        deliveryRadiusKm: Long = 15L
     ): Result<String> {
         var docPath = "branches"
         return try {
@@ -147,6 +189,11 @@ class CafeRepository(
                 .filter { it.isNotBlank() }
                 .distinct()
                 .take(30)
+            val cleanLat = latitude.coerceIn(-90.0, 90.0)
+            val cleanLng = longitude.coerceIn(-180.0, 180.0)
+            val cleanMapUrl = mapUrl.trim().take(300)
+            val cleanOpenHours = openHours.trim().ifBlank { "12:00 PM - 2:00 AM" }.take(60)
+            val cleanRadius = deliveryRadiusKm.coerceIn(1L, 100L)
 
             require(cleanName.length in 2..80) { "Branch name must be 2 to 80 characters" }
             require(cleanShortLabel.length in 2..40) { "Short label must be 2 to 40 characters" }
@@ -173,6 +220,11 @@ class CafeRepository(
                         "shortLabel" to cleanShortLabel,
                         "shortAddress" to cleanAddress,
                         "areas" to cleanAreas,
+                        "latitude" to cleanLat,
+                        "longitude" to cleanLng,
+                        "mapUrl" to cleanMapUrl,
+                        "openHours" to cleanOpenHours,
+                        "deliveryRadiusKm" to cleanRadius,
                         "active" to active,
                         "sortOrder" to finalOrder,
                         "createdAt" to FieldValue.serverTimestamp(),
@@ -195,6 +247,11 @@ class CafeRepository(
                             "shortLabel" to cleanShortLabel,
                             "shortAddress" to cleanAddress,
                             "areas" to cleanAreas,
+                            "latitude" to cleanLat,
+                            "longitude" to cleanLng,
+                            "mapUrl" to cleanMapUrl,
+                            "openHours" to cleanOpenHours,
+                            "deliveryRadiusKm" to cleanRadius,
                             "active" to active,
                             "sortOrder" to finalOrder,
                             "updatedAt" to FieldValue.serverTimestamp()
@@ -207,6 +264,11 @@ class CafeRepository(
                             "shortLabel" to cleanShortLabel,
                             "shortAddress" to cleanAddress,
                             "areas" to cleanAreas,
+                            "latitude" to cleanLat,
+                            "longitude" to cleanLng,
+                            "mapUrl" to cleanMapUrl,
+                            "openHours" to cleanOpenHours,
+                            "deliveryRadiusKm" to cleanRadius,
                             "active" to active,
                             "sortOrder" to finalOrder,
                             "createdAt" to FieldValue.serverTimestamp(),
@@ -444,15 +506,17 @@ class CafeRepository(
         val docPath = "users/$uid"
         return try {
             val user = auth.currentUser!!
+            val normalizedEmail = (user.email ?: "").trim().lowercase().take(120)
+            val normalizedName = (user.displayName ?: "Lahori Guest").trim().ifBlank { "Lahori Guest" }.take(80)
             val docRef = db.collection("users").document(uid)
             val snap = docRef.get().await()
             if (!snap.exists()) {
-                val isSuper = user.email.equals(SUPER_ADMIN_EMAIL, ignoreCase = true) && user.isEmailVerified
+                val isSuper = normalizedEmail.equals(SUPER_ADMIN_EMAIL, ignoreCase = true) && user.isEmailVerified
                 val role = if (isSuper) UserRole.SuperAdmin.name else UserRole.Customer.name
                 val payload = mapOf(
                     "userId" to uid,
-                    "email" to (user.email ?: "").take(120),
-                    "displayName" to (user.displayName ?: "Lahori Guest").take(80),
+                    "email" to normalizedEmail,
+                    "displayName" to normalizedName,
                     "role" to role,
                     "assignedBranchId" to "",
                     "favoriteItemIds" to emptyList<String>(),
@@ -460,6 +524,18 @@ class CafeRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 docRef.set(payload).await()
+            } else {
+                val storedEmail = snap.getString("email").orEmpty()
+                val storedName = snap.getString("displayName").orEmpty()
+                if ((normalizedEmail.isNotBlank() && storedEmail != normalizedEmail) || storedName.isBlank()) {
+                    docRef.update(
+                        mapOf(
+                            "email" to normalizedEmail,
+                            "displayName" to storedName.ifBlank { normalizedName },
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -967,7 +1043,7 @@ class CafeRepository(
                 "guestSessionId" to if (guestCheckout) guestSessionId.take(40) else "",
                 "guestCheckout" to guestCheckout,
                 "customerName" to cleanName,
-                "customerEmail" to (user.email ?: "").take(120),
+                "customerEmail" to (user.email ?: "").trim().lowercase().take(120),
                 "customerPhone" to cleanPhone,
                 "orderType" to orderType.name,
                 "deliveryAddress" to cleanAddress,
@@ -1236,23 +1312,34 @@ class CafeRepository(
             val uid = requireUserId()
             val user = auth.currentUser!!
             require(order.id.isNotBlank()) { "Order ID is required" }
-            require(order.status == OrderStatus.Delivered.name) { "Only delivered orders can be reviewed" }
+            require(OrderStatus.fromString(order.status) == OrderStatus.Delivered) {
+                "Only delivered orders can be reviewed"
+            }
             require(rating in 1..5) { "Rating must be between 1 and 5 stars" }
 
             val cleanComment = comment.trim().take(400)
-            val cleanCustomerName = order.customerName
-                .ifBlank { user.displayName ?: "Lahori Customer" }
-                .trim()
+            val cleanCustomerName = order.customerName.trim()
+                .ifBlank { user.displayName?.trim().orEmpty() }
+                .ifBlank { "Lahori Customer" }
                 .take(80)
-            val cleanItemsSummary = order.itemsSummary
+            val cleanItemsSummary = order.itemsSummary.trim()
                 .ifBlank { "Lahori Food Cafe Order" }
-                .trim()
                 .take(300)
             val branch = resolveBranch(order.branchId)
+            val cleanBranchName = order.branchName.trim()
+                .ifBlank { branch.name }
+                .ifBlank { "Lahori Food Cafe" }
+                .take(80)
 
             val docRef = db.collection("reviews").document(order.id)
-            val existing = docRef.get().await()
-            if (existing.exists()) {
+            val existing = try {
+                docRef.get().await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            if (existing != null && existing.exists()) {
                 docRef.update(
                     mapOf(
                         "rating" to rating.toLong(),
@@ -1267,7 +1354,7 @@ class CafeRepository(
                         "userId" to uid,
                         "customerName" to cleanCustomerName,
                         "branchId" to branch.id,
-                        "branchName" to order.branchName.ifBlank { branch.name }.take(80),
+                        "branchName" to cleanBranchName,
                         "rating" to rating.toLong(),
                         "comment" to cleanComment,
                         "itemsSummary" to cleanItemsSummary,
@@ -1281,6 +1368,21 @@ class CafeRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteReview(reviewId: String): Result<Unit> {
+        val docPath = "reviews/$reviewId"
+        return try {
+            requireUserId()
+            require(reviewId.isNotBlank()) { "Review ID required" }
+            db.collection("reviews").document(reviewId).delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docPath)
             Result.failure(e)
         }
     }
@@ -1307,6 +1409,26 @@ class CafeRepository(
             }
     }
 
+    fun observeAllFeedback(): Flow<List<CafeFeedback>> {
+        val path = "feedback"
+        return db.collection(path)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(CafeFeedback::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
+    }
+
     suspend fun submitCafeFeedback(
         branchId: String,
         foodRating: Int,
@@ -1325,7 +1447,7 @@ class CafeRepository(
                 .trim()
                 .ifBlank { "Lahori Customer" }
                 .take(80)
-            val cleanEmail = (user.email ?: "").trim().take(120)
+            val cleanEmail = (user.email ?: "").trim().lowercase().take(120)
             val branch = resolveBranch(branchId)
 
             val docRef = db.collection("feedback").document()
@@ -1349,6 +1471,21 @@ class CafeRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.CREATE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteFeedback(feedbackId: String): Result<Unit> {
+        val docPath = "feedback/$feedbackId"
+        return try {
+            requireUserId()
+            require(feedbackId.isNotBlank()) { "Feedback ID required" }
+            db.collection("feedback").document(feedbackId).delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docPath)
             Result.failure(e)
         }
     }
