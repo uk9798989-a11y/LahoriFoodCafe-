@@ -85,6 +85,7 @@ service cloud.firestore {
              data.category is string && data.category.size() >= 1 && data.category.size() <= 40 &&
              data.pricePkr is int && data.pricePkr > 0 && data.pricePkr <= 100000 &&
              data.imageKey is string && data.imageKey.size() >= 1 && data.imageKey.size() <= 50 &&
+             (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1000)) &&
              data.badgeText is string && data.badgeText.size() <= 30 &&
              data.available is bool &&
              data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 10000;
@@ -211,7 +212,7 @@ service cloud.firestore {
       allow create: if isSuperAdmin() &&
                        isValidId(itemId) &&
                        incoming().keys().hasAll(['name', 'description', 'category', 'pricePkr', 'imageKey', 'badgeText', 'available', 'sortOrder', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['name', 'description', 'category', 'pricePkr', 'imageKey', 'badgeText', 'available', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['name', 'description', 'category', 'pricePkr', 'imageKey', 'imageUrl', 'badgeText', 'available', 'sortOrder', 'createdAt', 'updatedAt']) &&
                        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
                        isValidMenuItem(incoming());
@@ -221,7 +222,7 @@ service cloud.firestore {
                        isValidMenuItem(incoming()) &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'category', 'pricePkr', 'imageKey', 'badgeText', 'available', 'sortOrder', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'category', 'pricePkr', 'imageKey', 'imageUrl', 'badgeText', 'available', 'sortOrder', 'updatedAt']);
 
       allow delete: if isSuperAdmin() && isValidId(itemId);
     }

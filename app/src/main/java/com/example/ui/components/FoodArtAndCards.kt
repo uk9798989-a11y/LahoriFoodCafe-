@@ -59,11 +59,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
 import com.example.model.MenuItem
 import com.example.model.SeedMenuData
 import com.example.ui.theme.LahoriBlack
@@ -79,6 +83,54 @@ fun formatPkr(amount: Long): String {
 @Composable
 fun FoodArtworkBox(
     imageKey: String,
+    modifier: Modifier = Modifier,
+    imageUrl: String = "",
+    previewModel: Any? = null,
+    contentDescription: String? = null,
+    compact: Boolean = false
+) {
+    val resolvedModel: Any? = previewModel ?: imageUrl.trim().takeIf { it.isNotBlank() }
+    if (resolvedModel != null) {
+        val context = LocalContext.current
+        val request = remember(resolvedModel, context) {
+            ImageRequest.Builder(context)
+                .data(resolvedModel)
+                .crossfade(true)
+                .build()
+        }
+        SubcomposeAsyncImage(
+            model = request,
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Crop,
+            modifier = modifier,
+            loading = {
+                DefaultFoodArtworkCanvas(
+                    imageKey = imageKey,
+                    compact = compact,
+                    modifier = Modifier.fillMaxSize()
+                )
+            },
+            error = {
+                DefaultFoodArtworkCanvas(
+                    imageKey = imageKey,
+                    compact = compact,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        )
+    } else {
+        DefaultFoodArtworkCanvas(
+            imageKey = imageKey,
+            compact = compact,
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
+private fun DefaultFoodArtworkCanvas(
+    imageKey: String,
+    compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val (colors, icon, accentTint) = remember(imageKey) {
@@ -171,15 +223,15 @@ fun FoodArtworkBox(
         Surface(
             shape = CircleShape,
             color = LahoriWhite,
-            shadowElevation = 10.dp,
-            modifier = Modifier.size(78.dp)
+            shadowElevation = if (compact) 4.dp else 10.dp,
+            modifier = Modifier.size(if (compact) 36.dp else 78.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
                     tint = accentTint,
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.size(if (compact) 20.dp else 44.dp)
                 )
             }
         }
@@ -283,6 +335,8 @@ fun MenuItemCard(
             ) {
                 FoodArtworkBox(
                     imageKey = item.imageKey,
+                    imageUrl = item.imageUrl,
+                    contentDescription = item.name,
                     modifier = Modifier.fillMaxSize()
                 )
 

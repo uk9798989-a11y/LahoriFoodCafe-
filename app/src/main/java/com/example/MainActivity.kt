@@ -653,6 +653,7 @@ private fun AuthenticatedCafeShell(
     val isSubmittingFeedback by viewModel.isSubmittingFeedback.collectAsStateWithLifecycle()
     val isSavingStaff by viewModel.isSavingStaff.collectAsStateWithLifecycle()
     val isSavingBranch by viewModel.isSavingBranch.collectAsStateWithLifecycle()
+    val isSavingMenuItem by viewModel.isSavingMenuItem.collectAsStateWithLifecycle()
     val branchAssignmentLoaded by viewModel.branchAssignmentLoaded.collectAsStateWithLifecycle()
     val trackedOrderState by viewModel.trackedOrderState.collectAsStateWithLifecycle()
     val fcmTokenRegistered by viewModel.fcmTokenRegistered.collectAsStateWithLifecycle()
@@ -818,6 +819,7 @@ private fun AuthenticatedCafeShell(
             onDeleteReview = { viewModel.deleteReview(it) },
             onDeleteFeedback = { viewModel.deleteFeedback(it) },
             isSavingStaff = isSavingStaff,
+            isSavingMenuItem = isSavingMenuItem,
             branches = branchesList,
             isSavingBranch = isSavingBranch,
             onSaveBranch = { branchId, name, shortLabel, shortAddress, areas, active, sortOrder, lat, lng, mapUrl, openHours, done ->
@@ -839,8 +841,23 @@ private fun AuthenticatedCafeShell(
             onDeleteBranch = { viewModel.deleteBranch(it) },
             onSeedBranches = { viewModel.seedBranchesNow() },
             onUpdateOrderStatus = { orderId, status -> viewModel.updateOrderStatus(orderId, status) },
-            onSaveMenuItem = { id, name, desc, cat, price, imgKey, badge, avail, sort, done ->
-                viewModel.saveMenuItem(id, name, desc, cat, price, imgKey, badge, avail, sort, done)
+            onSaveMenuItem = { id, name, desc, cat, price, imgKey, imgUrl, pickedUri, badge, avail, sort, onError, done ->
+                viewModel.saveMenuItem(
+                    context = context,
+                    itemId = id,
+                    name = name,
+                    description = desc,
+                    category = cat,
+                    pricePkr = price,
+                    imageKey = imgKey,
+                    imageUrl = imgUrl,
+                    pickedImageUri = pickedUri,
+                    badgeText = badge,
+                    available = avail,
+                    sortOrder = sort,
+                    onError = onError,
+                    onDone = done
+                )
             },
             onDeleteMenuItem = { viewModel.deleteMenuItem(it) },
             onSeedMenu = { viewModel.seedMenuNow() },

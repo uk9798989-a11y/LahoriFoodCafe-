@@ -88,6 +88,7 @@ fun ExploreScreen(
         // 1. Large, Striking Auto-Scrolling Hero Carousel
         item(key = "hero_banner") {
             HeroPromoCarousel(
+                menuItems = menuItems,
                 onBannerClick = { category ->
                     selectedCategory = category
                 }
@@ -246,6 +247,7 @@ fun ExploreScreen(
 
 @Composable
 private fun HeroPromoCarousel(
+    menuItems: List<MenuItem>,
     onBannerClick: (String) -> Unit
 ) {
     val banners = SeedMenuData.promoBanners
@@ -356,8 +358,16 @@ private fun HeroPromoCarousel(
 
                     Spacer(modifier = Modifier.width(12.dp))
 
+                    val bannerPhotoUrl = remember(menuItems, banner.targetCategory) {
+                        menuItems.firstOrNull {
+                            it.category.equals(banner.targetCategory, ignoreCase = true) &&
+                                it.imageUrl.isNotBlank()
+                        }?.imageUrl.orEmpty()
+                    }
                     FoodArtworkBox(
                         imageKey = banner.imageKey,
+                        imageUrl = bannerPhotoUrl,
+                        contentDescription = banner.title,
                         modifier = Modifier
                             .size(124.dp)
                             .clip(RoundedCornerShape(16.dp))

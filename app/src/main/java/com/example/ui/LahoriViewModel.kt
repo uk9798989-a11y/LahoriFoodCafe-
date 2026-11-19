@@ -1,9 +1,12 @@
 package com.example.ui
 
+import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.CafeRepository
+import com.example.data.MenuImageStorageHelper
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
@@ -251,6 +254,9 @@ class LahoriViewModel(
 
     private val _isSavingBranch = MutableStateFlow(false)
     val isSavingBranch: StateFlow<Boolean> = _isSavingBranch.asStateFlow()
+
+    private val _isSavingMenuItem = MutableStateFlow(false)
+    val isSavingMenuItem: StateFlow<Boolean> = _isSavingMenuItem.asStateFlow()
 
     private val _branchAssignmentLoaded = MutableStateFlow(isSuperAdminByEmail || currentUserEmail.isBlank())
     val branchAssignmentLoaded: StateFlow<Boolean> = _branchAssignmentLoaded.asStateFlow()
@@ -882,31 +888,66 @@ class LahoriViewModel(
     }
 
     fun saveMenuItem(
+        context: Context,
         itemId: String?,
         name: String,
         description: String,
         category: String,
         pricePkr: Long,
         imageKey: String,
+        imageUrl: String,
+        pickedImageUri: Uri?,
         badgeText: String,
         available: Boolean,
         sortOrder: Long,
+        onError: (String) -> Unit = {},
         onDone: () -> Unit
     ) {
+        if (_isSavingMenuItem.value) return
+        _isSavingMenuItem.value = true
         viewModelScope.launch {
-            val res = repository.saveMenuItem(
-                itemId = itemId,
-                name = name,
-                description = description,
-                category = category,
-                pricePkr = pricePkr,
-                imageKey = imageKey,
-                badgeText = badgeText,
-                available = available,
-                sortOrder = sortOrder
-            )
-            res.onSuccess { onDone() }.onFailure { err ->
-                _actionError.value = err.localizedMessage ?: "Failed to save menu item"
+            try {
+                val targetId = itemId?.takeIf { it.isNotBlank() } ?: repository.allocateMenuItemId()
+                var resolvedImageUrl = imageUrl.trim()
+
+                if (pickedImageUri != null) {
+                    val uploadRes = MenuImageStorageHelper.uploadMenuItemImage(
+                        context = context.applicationContext,
+                        itemId = targetId,
+                        imageUri = pickedImageUri
+                    )
+                    if (uploadRes.isFailure) {
+                        val msg = uploadRes.exceptionOrNull()?.localizedMessage
+                            ?: "Failed to upload menu item image"
+                        _actionError.value = msg
+                        onError(msg)
+                        return@launch
+                    }
+                    resolvedImageUrl = uploadRes.getOrThrow()
+                }
+
+                val res = repository.saveMenuItem(
+                    itemId = itemId,
+                    name = name,
+                    description = description,
+                    category = category,
+                    pricePkr = pricePkr,
+                    imageKey = imageKey,
+                    imageUrl = resolvedImageUrl,
+                    badgeText = badgeText,
+                    available = available,
+                    sortOrder = sortOrder,
+                    preAllocatedId = targetId
+                )
+                res.onSuccess {
+                    onDone()
+                }.onFailure { err ->
+                    val msg = err.localizedMessage ?: "Failed to save menu item"
+                    _actionError.value = msg
+                    onError(msg)
+                }
+            } finally {
+                _isSavingMenuItem.value = false
             }
         }
     }

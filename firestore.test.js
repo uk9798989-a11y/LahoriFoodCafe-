@@ -66,9 +66,44 @@ test("Menu manager: Customer cannot mutate menu; SuperAdmin can CRUD menu", asyn
   await assertFails(custDb.collection("menu_items").doc("zinger_1").set(validMenuPayload));
   await assertSucceeds(superDb.collection("menu_items").doc("zinger_1").set(validMenuPayload));
   await assertSucceeds(custDb.collection("menu_items").get());
-  await assertSucceeds(superDb.collection("menu_items").doc("zinger_1").update({ pricePkr: 690, updatedAt: new Date(Date.now() - 1000) }));
+  await assertSucceeds(
+    superDb.collection("menu_items").doc("zinger_1").update({
+      pricePkr: 690,
+      imageUrl: "https://firebasestorage.googleapis.com/v0/b/gen-lang-client-0251605363.firebasestorage.app/o/menu-items%2Fzinger_1%2Fphoto.jpg?alt=media",
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+  // Clearing imageUrl back to empty string succeeds (fallback to Artwork Theme)
+  await assertSucceeds(
+    superDb.collection("menu_items").doc("zinger_1").update({
+      imageUrl: "",
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+  // Oversized or non-string imageUrl is rejected
+  await assertFails(
+    superDb.collection("menu_items").doc("zinger_1").update({
+      imageUrl: "https://example.com/" + "a".repeat(1005),
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+  await assertFails(
+    superDb.collection("menu_items").doc("zinger_bad").set({
+      ...validMenuPayload,
+      imageUrl: 12345,
+    })
+  );
+  // Creating a menu item with imageUrl directly succeeds for SuperAdmin
+  await assertSucceeds(
+    superDb.collection("menu_items").doc("pasta_custom").set({
+      ...validMenuPayload,
+      name: "Lahori Special Pasta",
+      imageUrl: "https://images.example.com/lahori-pasta.jpg",
+    })
+  );
   await assertFails(custDb.collection("menu_items").doc("zinger_1").delete());
   await assertSucceeds(superDb.collection("menu_items").doc("zinger_1").delete());
+  await assertSucceeds(superDb.collection("menu_items").doc("pasta_custom").delete());
 });
 
 test("User profile isolation and privilege escalation guard", async () => {

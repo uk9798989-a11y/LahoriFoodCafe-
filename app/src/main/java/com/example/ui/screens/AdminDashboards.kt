@@ -1,6 +1,10 @@
 package com.example.ui.screens
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -32,11 +36,13 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddBusiness
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.People
@@ -75,12 +81,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.MenuImageStorageHelper
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
@@ -95,6 +104,7 @@ import com.example.model.SUPER_ADMIN_EMAIL
 import com.example.model.SeedMenuData
 import com.example.model.UiState
 import com.example.model.UserRole
+import com.example.ui.components.FoodArtworkBox
 import com.example.ui.components.formatPkr
 import com.example.ui.theme.LahoriBlack
 import com.example.ui.theme.LahoriGold
@@ -117,9 +127,12 @@ fun SuperAdminDashboardScreen(
         category: String,
         pricePkr: Long,
         imageKey: String,
+        imageUrl: String,
+        pickedImageUri: Uri?,
         badgeText: String,
         available: Boolean,
         sortOrder: Long,
+        onError: (String) -> Unit,
         onDone: () -> Unit
     ) -> Unit,
     onDeleteMenuItem: (String) -> Unit,
@@ -141,6 +154,7 @@ fun SuperAdminDashboardScreen(
     onDeleteReview: (String) -> Unit = {},
     onDeleteFeedback: (String) -> Unit = {},
     isSavingStaff: Boolean = false,
+    isSavingMenuItem: Boolean = false,
     branches: List<CafeBranch> = BranchDirectory.defaultBranches,
     isSavingBranch: Boolean = false,
     onSaveBranch: (
@@ -377,22 +391,61 @@ fun SuperAdminDashboardScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(14.dp),
+                                        .padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
+                                    FoodArtworkBox(
+                                        imageKey = item.imageKey,
+                                        imageUrl = item.imageUrl,
+                                        contentDescription = item.name,
+                                        compact = true,
+                                        modifier = Modifier
+                                            .size(62.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                    )
+
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(item.name, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                                        Text(
+                                            text = item.name,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                         Text(
                                             text = "${item.category} • ${formatPkr(item.pricePkr)}",
                                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                            color = LahoriRed
+                                            color = LahoriRed,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
-                                        Text(
-                                            text = if (item.available) "In Stock" else "Sold Out",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = if (item.available) LahoriSuccess else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = if (item.available) "In Stock" else "Sold Out",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (item.available) LahoriSuccess else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            if (item.imageUrl.isNotBlank()) {
+                                                Surface(
+                                                    color = LahoriGold.copy(alpha = 0.22f),
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "PHOTO",
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            fontSize = 9.sp,
+                                                            fontWeight = FontWeight.ExtraBold
+                                                        ),
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
 
                                     Row {
@@ -401,14 +454,18 @@ fun SuperAdminDashboardScreen(
                                                 editingMenuItem = if (isCloudDoc) item else item.copy(id = "")
                                                 showAddMenuDialog = true
                                             },
-                                            modifier = Modifier.size(44.dp)
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .testTag("admin_edit_menu_item_${item.id}")
                                         ) {
                                             Icon(Icons.Filled.Edit, contentDescription = "Edit menu item", tint = MaterialTheme.colorScheme.onSurface)
                                         }
                                         if (isCloudDoc) {
                                             IconButton(
                                                 onClick = { onDeleteMenuItem(item.id) },
-                                                modifier = Modifier.size(44.dp)
+                                                modifier = Modifier
+                                                    .size(48.dp)
+                                                    .testTag("admin_delete_menu_item_${item.id}")
                                             ) {
                                                 Icon(Icons.Filled.DeleteOutline, contentDescription = "Delete menu item", tint = LahoriRed)
                                             }
@@ -533,12 +590,28 @@ fun SuperAdminDashboardScreen(
     if (showAddMenuDialog) {
         MenuEditorDialog(
             initialItem = editingMenuItem,
+            isSaving = isSavingMenuItem,
             onDismiss = {
-                showAddMenuDialog = false
-                editingMenuItem = null
+                if (!isSavingMenuItem) {
+                    showAddMenuDialog = false
+                    editingMenuItem = null
+                }
             },
-            onSave = { id, name, desc, cat, price, imgKey, badge, available, sortOrder ->
-                onSaveMenuItem(id, name, desc, cat, price, imgKey, badge, available, sortOrder) {
+            onSave = { id, name, desc, cat, price, imgKey, imgUrl, pickedUri, badge, available, sortOrder, onError ->
+                onSaveMenuItem(
+                    id,
+                    name,
+                    desc,
+                    cat,
+                    price,
+                    imgKey,
+                    imgUrl,
+                    pickedUri,
+                    badge,
+                    available,
+                    sortOrder,
+                    onError
+                ) {
                     showAddMenuDialog = false
                     editingMenuItem = null
                 }
@@ -2037,6 +2110,7 @@ private fun AdminOrderControlCard(
 @Composable
 private fun MenuEditorDialog(
     initialItem: MenuItem?,
+    isSaving: Boolean,
     onDismiss: () -> Unit,
     onSave: (
         itemId: String?,
@@ -2045,20 +2119,35 @@ private fun MenuEditorDialog(
         category: String,
         pricePkr: Long,
         imageKey: String,
+        imageUrl: String,
+        pickedImageUri: Uri?,
         badgeText: String,
         available: Boolean,
-        sortOrder: Long
+        sortOrder: Long,
+        onError: (String) -> Unit
     ) -> Unit
 ) {
-    var name by remember { mutableStateOf(initialItem?.name ?: "") }
-    var description by remember { mutableStateOf(initialItem?.description ?: "") }
-    var category by remember { mutableStateOf(initialItem?.category ?: "BURGERS") }
-    var priceStr by remember { mutableStateOf(initialItem?.pricePkr?.toString() ?: "450") }
-    var imageKey by remember { mutableStateOf(initialItem?.imageKey ?: "zinger_burger") }
-    var badgeText by remember { mutableStateOf(initialItem?.badgeText ?: "NEW") }
-    var available by remember { mutableStateOf(initialItem?.available ?: true) }
-    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var name by remember(initialItem?.id) { mutableStateOf(initialItem?.name ?: "") }
+    var description by remember(initialItem?.id) { mutableStateOf(initialItem?.description ?: "") }
+    var category by remember(initialItem?.id) { mutableStateOf(initialItem?.category ?: "BURGERS") }
+    var priceStr by remember(initialItem?.id) { mutableStateOf(initialItem?.pricePkr?.toString() ?: "450") }
+    var imageKey by remember(initialItem?.id) { mutableStateOf(initialItem?.imageKey ?: "zinger_burger") }
+    var imageUrl by remember(initialItem?.id) { mutableStateOf(initialItem?.imageUrl ?: "") }
+    var pickedImageUri by remember(initialItem?.id) { mutableStateOf<Uri?>(null) }
+    var badgeText by remember(initialItem?.id) { mutableStateOf(initialItem?.badgeText ?: "NEW") }
+    var available by remember(initialItem?.id) { mutableStateOf(initialItem?.available ?: true) }
+    var errorMsg by remember(initialItem?.id) { mutableStateOf<String?>(null) }
 
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            pickedImageUri = uri
+            errorMsg = null
+        }
+    }
+
+    val hasCustomImage = pickedImageUri != null || imageUrl.isNotBlank()
     val categories = SeedMenuData.categories.filter { it != "ALL" }
     val imageKeys = listOf(
         "pasta_bowl",
@@ -2075,7 +2164,7 @@ private fun MenuEditorDialog(
     )
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isSaving) onDismiss() },
         containerColor = MaterialTheme.colorScheme.surface,
         title = {
             Text(
@@ -2087,37 +2176,255 @@ private fun MenuEditorDialog(
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // Item Image Upload & Live Preview Section
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Item Image",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = when {
+                                    pickedImageUri != null -> LahoriRed
+                                    imageUrl.isNotBlank() -> LahoriSuccess
+                                    else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                                }
+                            ) {
+                                Text(
+                                    text = when {
+                                        pickedImageUri != null -> "READY TO UPLOAD"
+                                        imageUrl.isNotBlank() -> "CUSTOM PHOTO"
+                                        else -> "ARTWORK THEME"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    ),
+                                    color = if (hasCustomImage) LahoriWhite else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        // Live Preview Thumbnail
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(136.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .testTag("menu_image_preview_box")
+                        ) {
+                            FoodArtworkBox(
+                                imageKey = imageKey,
+                                imageUrl = imageUrl,
+                                previewModel = pickedImageUri,
+                                contentDescription = name.ifBlank { "Menu item photo preview" },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            if (isSaving && pickedImageUri != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(LahoriBlack.copy(alpha = 0.55f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        CircularProgressIndicator(
+                                            color = LahoriGold,
+                                            strokeWidth = 3.dp,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                        Text(
+                                            text = "Uploading photo...",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = LahoriWhite
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Gallery Pick + Remove Image buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                enabled = !isSaving,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, LahoriRed),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("menu_upload_image_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.AddPhotoAlternate,
+                                    contentDescription = null,
+                                    tint = LahoriRed,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = if (hasCustomImage) "CHANGE PHOTO" else "UPLOAD PHOTO",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = LahoriRed,
+                                    maxLines = 1
+                                )
+                            }
+
+                            if (hasCustomImage) {
+                                OutlinedButton(
+                                    onClick = {
+                                        pickedImageUri = null
+                                        imageUrl = ""
+                                        errorMsg = null
+                                    },
+                                    enabled = !isSaving,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .height(48.dp)
+                                        .testTag("menu_remove_image_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.DeleteOutline,
+                                        contentDescription = "Remove Image",
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        text = "REMOVE",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+
+                        // Optional direct Image URL field
+                        OutlinedTextField(
+                            value = imageUrl,
+                            onValueChange = { updated ->
+                                imageUrl = updated
+                                if (updated.isNotBlank()) {
+                                    pickedImageUri = null
+                                }
+                                errorMsg = null
+                            },
+                            enabled = !isSaving,
+                            label = { Text("Or paste Image URL (https://...)") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Filled.Link,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            },
+                            trailingIcon = if (imageUrl.isNotBlank() && !isSaving) {
+                                {
+                                    IconButton(
+                                        onClick = { imageUrl = ""; errorMsg = null },
+                                        modifier = Modifier.size(40.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Clear image URL",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            } else null,
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Uri,
+                                imeAction = ImeAction.Next
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("menu_image_url_input")
+                        )
+
+                        Text(
+                            text = "Pick from device gallery to upload to Firebase Storage, paste an HTTPS image link, or leave empty to use the Artwork Theme below.",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it; errorMsg = null },
+                    enabled = !isSaving,
                     label = { Text("Item Name") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("menu_item_name_input")
                 )
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
+                    enabled = !isSaving,
                     label = { Text("Description") },
                     maxLines = 2,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("menu_item_desc_input")
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = priceStr,
                         onValueChange = { priceStr = it.filter { c -> c.isDigit() }; errorMsg = null },
+                        enabled = !isSaving,
                         label = { Text("Price (PKR)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("menu_item_price_input")
                     )
                     OutlinedTextField(
                         value = badgeText,
                         onValueChange = { badgeText = it },
+                        enabled = !isSaving,
                         label = { Text("Badge") },
                         singleLine = true,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("menu_item_badge_input")
                     )
                 }
 
@@ -2126,17 +2433,19 @@ private fun MenuEditorDialog(
                     categories.forEach { cat ->
                         FilterChip(
                             selected = category == cat,
+                            enabled = !isSaving,
                             onClick = { category = cat },
                             label = { Text(cat, fontSize = 10.sp) }
                         )
                     }
                 }
 
-                Text("Artwork Theme", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Artwork Theme (Fallback)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     imageKeys.forEach { key ->
                         FilterChip(
                             selected = imageKey == key,
+                            enabled = !isSaving,
                             onClick = { imageKey = key },
                             label = { Text(key.replace("_", " "), fontSize = 10.sp) }
                         )
@@ -2151,6 +2460,7 @@ private fun MenuEditorDialog(
                     Text("Available in Menu", style = MaterialTheme.typography.bodyMedium)
                     Switch(
                         checked = available,
+                        enabled = !isSaving,
                         onCheckedChange = { available = it },
                         colors = SwitchDefaults.colors(checkedTrackColor = LahoriRed)
                     )
@@ -2163,31 +2473,60 @@ private fun MenuEditorDialog(
         },
         confirmButton = {
             Button(
+                enabled = !isSaving,
                 onClick = {
                     val price = priceStr.toLongOrNull() ?: 0L
-                    if (name.isBlank() || price <= 0L) {
-                        errorMsg = "Enter a valid name and PKR price > 0."
-                    } else {
-                        onSave(
-                            initialItem?.id?.takeIf { it.isNotBlank() },
-                            name,
-                            description,
-                            category,
-                            price,
-                            imageKey,
-                            badgeText,
-                            available,
-                            initialItem?.sortOrder ?: 10L
-                        )
+                    val trimmedUrl = imageUrl.trim()
+                    when {
+                        name.isBlank() || price <= 0L -> {
+                            errorMsg = "Enter a valid name and PKR price > 0."
+                        }
+                        pickedImageUri == null && !MenuImageStorageHelper.isValidRemoteImageUrl(trimmedUrl) -> {
+                            errorMsg = "Image URL must start with https:// or http://"
+                        }
+                        else -> {
+                            errorMsg = null
+                            onSave(
+                                initialItem?.id?.takeIf { it.isNotBlank() },
+                                name,
+                                description,
+                                category,
+                                price,
+                                imageKey,
+                                trimmedUrl,
+                                pickedImageUri,
+                                badgeText,
+                                available,
+                                initialItem?.sortOrder ?: 10L
+                            ) { saveErr ->
+                                errorMsg = saveErr
+                            }
+                        }
                     }
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = LahoriRed)
+                colors = ButtonDefaults.buttonColors(containerColor = LahoriRed),
+                modifier = Modifier.testTag("menu_editor_save_btn")
             ) {
-                Text("SAVE")
+                if (isSaving) {
+                    CircularProgressIndicator(
+                        color = LahoriWhite,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (pickedImageUri != null) "UPLOADING..." else "SAVING...")
+                } else {
+                    Text("SAVE")
+                }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("CANCEL", color = MaterialTheme.colorScheme.onSurface) }
+            TextButton(
+                enabled = !isSaving,
+                onClick = onDismiss
+            ) {
+                Text("CANCEL", color = MaterialTheme.colorScheme.onSurface)
+            }
         }
     )
 }

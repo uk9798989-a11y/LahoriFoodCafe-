@@ -290,6 +290,7 @@ data class MenuItem(
     val category: String = "EVERYDAY VALUE",
     val pricePkr: Long = 0L,
     val imageKey: String = "zinger_burger",
+    val imageUrl: String = "",
     val badgeText: String = "",
     val available: Boolean = true,
     val sortOrder: Long = 0L,

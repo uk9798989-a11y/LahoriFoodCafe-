@@ -31,6 +31,7 @@
         "category": { "type": "string", "description": "Menu category pill." },
         "pricePkr": { "type": "integer", "description": "Unit price in PKR." },
         "imageKey": { "type": "string", "description": "Visual key for menu item card artwork." },
+        "imageUrl": { "type": "string", "description": "Optional custom photo download URL from Firebase Storage or external HTTPS image URL." },
         "badgeText": { "type": "string", "description": "Optional badge label such as BESTSELLER or SPICY." },
         "available": { "type": "boolean", "description": "Whether item is currently available." },
         "sortOrder": { "type": "integer", "description": "Ordering priority in menu grid." },

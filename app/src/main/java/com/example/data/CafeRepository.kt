@@ -422,6 +422,8 @@ class CafeRepository(
         }
     }
 
+    fun allocateMenuItemId(): String = db.collection("menu_items").document().id
+
     suspend fun saveMenuItem(
         itemId: String?,
         name: String,
@@ -429,9 +431,11 @@ class CafeRepository(
         category: String,
         pricePkr: Long,
         imageKey: String,
+        imageUrl: String = "",
         badgeText: String,
         available: Boolean,
-        sortOrder: Long
+        sortOrder: Long,
+        preAllocatedId: String? = null
     ): Result<Unit> {
         var docPath = "menu_items"
         return try {
@@ -439,13 +443,21 @@ class CafeRepository(
             val trimmedName = name.trim()
             val trimmedDesc = description.trim()
             val trimmedCategory = category.trim()
+            val trimmedImageUrl = imageUrl.trim().take(1000)
             require(trimmedName.length in 1..80) { "Name must be 1 to 80 characters" }
             require(trimmedDesc.length <= 300) { "Description must be 300 characters or less" }
             require(trimmedCategory.length in 1..40) { "Category must be 1 to 40 characters" }
             require(pricePkr in 1..100000) { "Price must be between 1 and 100,000 PKR" }
+            require(MenuImageStorageHelper.isValidRemoteImageUrl(trimmedImageUrl)) {
+                "Image URL must start with http:// or https://"
+            }
 
             if (itemId.isNullOrBlank()) {
-                val docRef = db.collection("menu_items").document()
+                val docRef = if (!preAllocatedId.isNullOrBlank()) {
+                    db.collection("menu_items").document(preAllocatedId.trim())
+                } else {
+                    db.collection("menu_items").document()
+                }
                 docPath = docRef.path
                 val payload = mapOf(
                     "name" to trimmedName,
@@ -453,6 +465,7 @@ class CafeRepository(
                     "category" to trimmedCategory,
                     "pricePkr" to pricePkr,
                     "imageKey" to imageKey.ifBlank { "zinger_burger" },
+                    "imageUrl" to trimmedImageUrl,
                     "badgeText" to badgeText.trim().take(30),
                     "available" to available,
                     "sortOrder" to sortOrder.coerceIn(0L, 10000L),
@@ -469,6 +482,7 @@ class CafeRepository(
                     "category" to trimmedCategory,
                     "pricePkr" to pricePkr,
                     "imageKey" to imageKey.ifBlank { "zinger_burger" },
+                    "imageUrl" to trimmedImageUrl,
                     "badgeText" to badgeText.trim().take(30),
                     "available" to available,
                     "sortOrder" to sortOrder.coerceIn(0L, 10000L),
