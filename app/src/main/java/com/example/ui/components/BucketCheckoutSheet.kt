@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -61,7 +63,11 @@ import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
 import com.example.model.MenuItem
 import com.example.model.OrderType
+import com.example.model.Promotion
 import com.example.ui.SharedSessionState
+import com.example.ui.screens.formatPromoExpiryLabel
+import com.example.ui.theme.LahoriBlack
+import com.example.ui.theme.LahoriGold
 import com.example.ui.theme.LahoriRed
 import com.example.ui.theme.LahoriSuccess
 import com.example.ui.theme.LahoriWhite
@@ -79,7 +85,8 @@ fun BucketCheckoutSheet(
     onClearPromoCode: () -> Unit,
     onPlaceOrder: (name: String, phone: String, guestCheckout: Boolean) -> Unit,
     onDismiss: () -> Unit,
-    branches: List<CafeBranch> = BranchDirectory.defaultBranches
+    branches: List<CafeBranch> = BranchDirectory.defaultBranches,
+    branchPromos: List<Promotion> = emptyList()
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var customerName by remember(defaultCustomerName) {
@@ -314,6 +321,59 @@ fun BucketCheckoutSheet(
                                     }
                                 ) {
                                     Text("REMOVE", style = MaterialTheme.typography.labelSmall, color = LahoriRed)
+                                }
+                            }
+                        }
+
+                        if (branchPromos.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "${branch.displayShortLabel()} Exclusive Offers — tap to apply:",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = LahoriRed
+                                )
+                                LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    items(branchPromos, key = { it.id }) { promo ->
+                                        val isApplied = sessionState.appliedPromoLabel.equals(promo.code, ignoreCase = true)
+                                        val discLabel = if (promo.discountType.equals("PERCENT", ignoreCase = true)) {
+                                            "${promo.discountValue}% OFF"
+                                        } else {
+                                            "Rs. ${promo.discountValue} OFF"
+                                        }
+                                        val expiryShort = formatPromoExpiryLabel(promo.expiresAt)
+                                        Surface(
+                                            onClick = {
+                                                promoInput = promo.code
+                                                isValidatingPromo = true
+                                                onApplyPromoCode(promo.code) { success, message ->
+                                                    isValidatingPromo = false
+                                                    promoIsSuccess = success
+                                                    promoStatusMsg = message
+                                                }
+                                            },
+                                            shape = CircleShape,
+                                            color = if (isApplied) successText else LahoriBlack,
+                                            border = BorderStroke(
+                                                1.dp,
+                                                if (isApplied) successText else LahoriGold
+                                            ),
+                                            modifier = Modifier.testTag("checkout_branch_promo_${promo.code}")
+                                        ) {
+                                            Text(
+                                                text = if (isApplied) {
+                                                    "${promo.code} ✓"
+                                                } else {
+                                                    "${promo.code} • $discLabel ($expiryShort)"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = if (isApplied) LahoriWhite else LahoriGold,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }

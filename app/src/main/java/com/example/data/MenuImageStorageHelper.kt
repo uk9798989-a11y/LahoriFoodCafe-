@@ -89,6 +89,71 @@ object MenuImageStorageHelper {
         }
     }
 
+    suspend fun uploadBranchBannerImage(
+        context: Context,
+        branchId: String,
+        bannerId: String,
+        imageUri: Uri
+    ): Result<String> {
+        return try {
+            val safeBranchId = branchId
+                .trim()
+                .replace(Regex("[^a-zA-Z0-9_\\-]"), "_")
+                .ifBlank { "branch_1" }
+            val safeBannerId = bannerId
+                .trim()
+                .replace(Regex("[^a-zA-Z0-9_\\-]"), "_")
+                .ifBlank { "banner_${System.currentTimeMillis()}" }
+
+            val compressedBytes = withContext(Dispatchers.IO) {
+                compressImageUriToJpeg(context.applicationContext, imageUri)
+            } ?: return Result.failure(
+                IllegalArgumentException("Could not read the selected banner image. Please pick another photo.")
+            )
+
+            val fileName = "banner_${System.currentTimeMillis()}.jpg"
+            val storageRef = Firebase.storage.reference
+                .child("branch-banners")
+                .child(safeBranchId)
+                .child(safeBannerId)
+                .child(fileName)
+
+            val metadata = storageMetadata {
+                contentType = "image/jpeg"
+                setCustomMetadata("branchId", safeBranchId)
+                setCustomMetadata("bannerId", safeBannerId)
+            }
+
+            storageRef.putBytes(compressedBytes, metadata).await()
+            val downloadUrl = storageRef.downloadUrl.await().toString()
+            Result.success(downloadUrl)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: StorageException) {
+            Log.e(TAG, "Firebase Storage banner upload failed (code=${e.errorCode})", e)
+            val friendly = when (e.errorCode) {
+                StorageException.ERROR_NOT_AUTHORIZED,
+                StorageException.ERROR_NOT_AUTHENTICATED ->
+                    "Storage upload denied. Ensure Firebase Storage rules allow banner uploads, or paste an HTTPS banner URL."
+                StorageException.ERROR_BUCKET_NOT_FOUND,
+                StorageException.ERROR_PROJECT_NOT_FOUND,
+                StorageException.ERROR_OBJECT_NOT_FOUND ->
+                    "Firebase Storage is not enabled yet in Firebase Console. Enable Storage or paste an HTTPS banner URL."
+                else ->
+                    "Banner upload failed: ${e.localizedMessage ?: "check internet connection or paste an image URL."}"
+            }
+            Result.failure(IllegalStateException(friendly, e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error uploading seasonal banner image", e)
+            Result.failure(
+                IllegalStateException(
+                    "Banner upload failed: ${e.localizedMessage ?: "please try again or paste an HTTPS banner URL."}",
+                    e
+                )
+            )
+        }
+    }
+
     private fun compressImageUriToJpeg(context: Context, uri: Uri): ByteArray? {
         val resolver = context.contentResolver
 

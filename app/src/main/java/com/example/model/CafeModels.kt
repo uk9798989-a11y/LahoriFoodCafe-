@@ -391,17 +391,62 @@ data class Promotion(
     val discountValue: Long = 0L,
     val minOrderPkr: Long = 0L,
     val active: Boolean = true,
+    val branchId: String = "",
+    val branchName: String = "",
+    val expiresAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
-    fun computeDiscount(subtotalPkr: Long): Long {
-        if (!active || subtotalPkr < minOrderPkr || subtotalPkr <= 0L) return 0L
+    fun isGlobal(): Boolean = branchId.isBlank()
+
+    fun appliesToBranch(selectedBranchId: String): Boolean =
+        branchId.isBlank() || branchId == selectedBranchId
+
+    fun isExpired(nowMillis: Long = System.currentTimeMillis()): Boolean =
+        expiresAt != null && expiresAt.toDate().time <= nowMillis
+
+    fun isCurrentlyValidForBranch(
+        selectedBranchId: String,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Boolean = active && appliesToBranch(selectedBranchId) && !isExpired(nowMillis)
+
+    fun computeDiscount(
+        subtotalPkr: Long,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Long {
+        if (!active || isExpired(nowMillis) || subtotalPkr < minOrderPkr || subtotalPkr <= 0L) return 0L
         return if (discountType.equals("PERCENT", ignoreCase = true)) {
             ((subtotalPkr * discountValue.coerceIn(0L, 90L)) / 100L).coerceIn(0L, subtotalPkr)
         } else {
             discountValue.coerceIn(0L, subtotalPkr)
         }
     }
+}
+
+@Keep
+@IgnoreExtraProperties
+data class BranchBanner(
+    @DocumentId val id: String = "",
+    val branchId: String = "",
+    val branchName: String = "",
+    val title: String = "",
+    val subtitle: String = "",
+    val promoCode: String = "",
+    val badgeText: String = "SEASONAL OFFER",
+    val imageUrl: String = "",
+    val targetCategory: String = "DEALS",
+    val active: Boolean = true,
+    val expiresAt: Timestamp? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun isExpired(nowMillis: Long = System.currentTimeMillis()): Boolean =
+        expiresAt != null && expiresAt.toDate().time <= nowMillis
+
+    fun isVisibleForBranch(
+        selectedBranchId: String,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Boolean = active && branchId.isNotBlank() && branchId == selectedBranchId && !isExpired(nowMillis)
 }
 
 @Keep

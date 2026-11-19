@@ -124,7 +124,23 @@ service cloud.firestore {
              ((data.discountType == 'PERCENT' && data.discountValue >= 1 && data.discountValue <= 90) ||
               (data.discountType == 'FLAT' && data.discountValue >= 1 && data.discountValue <= 100000)) &&
              data.minOrderPkr is int && data.minOrderPkr >= 0 && data.minOrderPkr <= 1000000 &&
-             data.active is bool;
+             data.active is bool &&
+             (!('branchId' in data) || data.branchId == '' || isValidBranchId(data.branchId)) &&
+             (!('branchName' in data) || (data.branchName is string && data.branchName.size() <= 80)) &&
+             (!('expiresAt' in data) || data.expiresAt == null || data.expiresAt is timestamp);
+    }
+
+    function isValidBranchBanner(data) {
+      return isValidBranchId(data.branchId) &&
+             data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80 &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 80 &&
+             data.subtitle is string && data.subtitle.size() <= 200 &&
+             data.promoCode is string && data.promoCode.size() <= 30 &&
+             data.badgeText is string && data.badgeText.size() <= 30 &&
+             data.imageUrl is string && data.imageUrl.size() >= 8 && data.imageUrl.size() <= 1000 &&
+             data.targetCategory is string && data.targetCategory.size() >= 1 && data.targetCategory.size() <= 40 &&
+             data.active is bool &&
+             (!('expiresAt' in data) || data.expiresAt == null || data.expiresAt is timestamp);
     }
 
     function isValidOrder(data) {
@@ -227,27 +243,73 @@ service cloud.firestore {
       allow delete: if isSuperAdmin() && isValidId(itemId);
     }
 
-    // Promotions: Readable by signed-in users, writable ONLY by SuperAdmin
+    // Promotions: Readable by signed-in users; SuperAdmin manages all; BranchAdmin manages ONLY own branchId promos
     match /promotions/{promoId} {
       allow list: if isSignedIn();
       allow get: if isSignedIn() && isValidId(promoId);
 
-      allow create: if isSuperAdmin() &&
-                       isValidId(promoId) &&
+      allow create: if isValidId(promoId) &&
+                       (
+                         isSuperAdmin() ||
+                         (('branchId' in incoming()) &&
+                          incoming().branchId is string &&
+                          incoming().branchId != '' &&
+                          isBranchAdminFor(incoming().branchId))
+                       ) &&
                        incoming().keys().hasAll(['code', 'discountType', 'discountValue', 'minOrderPkr', 'active', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['code', 'discountType', 'discountValue', 'minOrderPkr', 'active', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['code', 'discountType', 'discountValue', 'minOrderPkr', 'active', 'branchId', 'branchName', 'expiresAt', 'createdAt', 'updatedAt']) &&
                        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
                        isValidPromotion(incoming());
 
-      allow update: if isSuperAdmin() &&
-                       isValidId(promoId) &&
+      allow update: if isValidId(promoId) &&
                        isValidPromotion(incoming()) &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['code', 'discountType', 'discountValue', 'minOrderPkr', 'active', 'updatedAt']);
+                       (
+                         (isSuperAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['code', 'discountType', 'discountValue', 'minOrderPkr', 'active', 'branchId', 'branchName', 'expiresAt', 'updatedAt'])) ||
+                         (('branchId' in existing()) &&
+                          existing().branchId is string &&
+                          existing().branchId != '' &&
+                          isBranchAdminFor(existing().branchId) &&
+                          incoming().branchId == existing().branchId &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['code', 'discountType', 'discountValue', 'minOrderPkr', 'active', 'branchName', 'expiresAt', 'updatedAt']))
+                       );
 
-      allow delete: if isSuperAdmin() && isValidId(promoId);
+      allow delete: if isValidId(promoId) &&
+                       (
+                         isSuperAdmin() ||
+                         (('branchId' in existing()) &&
+                          existing().branchId is string &&
+                          existing().branchId != '' &&
+                          isBranchAdminFor(existing().branchId))
+                       );
+    }
+
+    // Seasonal Branch Banners: Readable by signed-in users; SuperAdmin or assigned BranchAdmin manages strictly for their branchId
+    match /branch_banners/{bannerId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && isValidId(bannerId);
+
+      allow create: if isValidId(bannerId) &&
+                       (isSuperAdmin() || isBranchAdminFor(incoming().branchId)) &&
+                       incoming().keys().hasAll(['branchId', 'branchName', 'title', 'subtitle', 'promoCode', 'badgeText', 'imageUrl', 'targetCategory', 'active', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['branchId', 'branchName', 'title', 'subtitle', 'promoCode', 'badgeText', 'imageUrl', 'targetCategory', 'active', 'expiresAt', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidBranchBanner(incoming());
+
+      allow update: if isValidId(bannerId) &&
+                       (isSuperAdmin() || isBranchAdminFor(existing().branchId)) &&
+                       isValidBranchBanner(incoming()) &&
+                       incoming().branchId == existing().branchId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['branchName', 'title', 'subtitle', 'promoCode', 'badgeText', 'imageUrl', 'targetCategory', 'active', 'expiresAt', 'updatedAt']);
+
+      allow delete: if isValidId(bannerId) &&
+                       (isSuperAdmin() || isBranchAdminFor(existing().branchId));
     }
 
     // Users & Saved Addresses (strict PII isolation)

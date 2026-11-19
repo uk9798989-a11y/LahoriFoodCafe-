@@ -50,10 +50,33 @@
         "discountValue": { "type": "integer", "description": "Percentage (1-90) or flat PKR value." },
         "minOrderPkr": { "type": "integer", "description": "Minimum subtotal in PKR required to apply." },
         "active": { "type": "boolean", "description": "Whether promotion is currently active." },
+        "branchId": { "type": "string", "description": "Optional branch ID restricting this promo exclusively to customers of that branch (empty string for global promos)." },
+        "branchName": { "type": "string", "description": "Optional branch display name for branch-scoped promos." },
+        "expiresAt": { "type": "string", "format": "date-time", "description": "Optional expiration timestamp for temporary discount codes." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
       },
       "required": ["code", "discountType", "discountValue", "minOrderPkr", "active", "createdAt", "updatedAt"]
+    },
+    "BranchBanner": {
+      "title": "BranchBanner",
+      "description": "Seasonal promotional banner image created by a Branch Admin that only appears for customers who selected that specific branch.",
+      "type": "object",
+      "properties": {
+        "branchId": { "type": "string", "description": "Branch ID that owns this seasonal banner." },
+        "branchName": { "type": "string", "description": "Display name of the branch." },
+        "title": { "type": "string", "description": "Headline displayed on the seasonal banner." },
+        "subtitle": { "type": "string", "description": "Supporting offer copy." },
+        "promoCode": { "type": "string", "description": "Optional linked branch promo code for one-tap apply." },
+        "badgeText": { "type": "string", "description": "Short pill label such as SEASONAL OFFER or LIMITED TIME." },
+        "imageUrl": { "type": "string", "description": "Firebase Storage download URL or HTTPS URL for the seasonal banner artwork." },
+        "targetCategory": { "type": "string", "description": "Menu category to filter when a customer taps the banner." },
+        "active": { "type": "boolean", "description": "Whether the seasonal banner is currently active." },
+        "expiresAt": { "type": "string", "format": "date-time", "description": "Optional expiration timestamp after which the banner automatically hides." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["branchId", "branchName", "title", "subtitle", "promoCode", "badgeText", "imageUrl", "targetCategory", "active", "createdAt", "updatedAt"]
     },
     "UserProfile": {
       "title": "UserProfile",
@@ -191,7 +214,11 @@
     },
     "/promotions/{promoId}": {
       "schema": { "$ref": "#/entities/Promotion" },
-      "description": "Promo codes for percentage or flat PKR discounts."
+      "description": "Global and branch-exclusive temporary promo codes for percentage or flat PKR discounts."
+    },
+    "/branch_banners/{bannerId}": {
+      "schema": { "$ref": "#/entities/BranchBanner" },
+      "description": "Branch-exclusive seasonal banner images shown only to customers who selected that specific branch."
     },
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },

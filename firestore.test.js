@@ -513,6 +513,107 @@ test("Multi-branch scalability: SuperAdmin manages unlimited branches & multiple
   await assertFails(branch1MgrBDb.collection("orders").doc("ord_b1").update({ status: "Dispatched", updatedAt: new Date(Date.now() - 200) }));
 });
 
+test("Branch Admin Promo & Seasonal Banner isolation: scoped strictly to assigned branchId", async () => {
+  const superDb = testEnv.authenticatedContext(SUPER_ADMIN_UID, { email: SUPER_ADMIN_EMAIL, email_verified: true }).firestore();
+  const branch1MgrDb = testEnv.authenticatedContext("b1_promo_mgr", { email: "b1.promo@gmail.com", email_verified: true }).firestore();
+  const branch2MgrDb = testEnv.authenticatedContext("b2_promo_mgr", { email: "b2.promo@gmail.com", email_verified: true }).firestore();
+  const custDb = testEnv.authenticatedContext(CUSTOMER_A, { email: "cust@gmail.com", email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+  const expiresNextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  // Assign Branch 1 & Branch 2 managers
+  await assertSucceeds(
+    superDb.collection("branch_admins").doc("b1.promo@gmail.com").set({
+      email: "b1.promo@gmail.com", role: "BranchAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe — Taranda Muhammad Panah", createdAt: now, updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    superDb.collection("branch_admins").doc("b2.promo@gmail.com").set({
+      email: "b2.promo@gmail.com", role: "BranchAdmin", branchId: "branch_2", branchName: "Lahori Food Cafe — Zahir Pir", createdAt: now, updatedAt: now,
+    })
+  );
+
+  // SuperAdmin creates a global promo
+  await assertSucceeds(
+    superDb.collection("promotions").doc("global20").set({
+      code: "GLOBAL20", discountType: "PERCENT", discountValue: 20, minOrderPkr: 500, active: true, branchId: "", branchName: "", expiresAt: null, createdAt: now, updatedAt: now,
+    })
+  );
+
+  // Branch 1 Admin creates a temporary promo for branch_1 -> SUCCEEDS
+  await assertSucceeds(
+    branch1MgrDb.collection("promotions").doc("branch_1_tmp15").set({
+      code: "TMP15", discountType: "PERCENT", discountValue: 15, minOrderPkr: 400, active: true, branchId: "branch_1", branchName: "Lahori Food Cafe TMP", expiresAt: expiresNextWeek, createdAt: now, updatedAt: now,
+    })
+  );
+
+  // Branch 1 Admin updates own branch promo -> SUCCEEDS
+  await assertSucceeds(
+    branch1MgrDb.collection("promotions").doc("branch_1_tmp15").update({
+      discountValue: 25, updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+
+  // Branch 1 Admin CANNOT create global promo or branch_2 promo, nor mutate global/branch_2 promos
+  await assertFails(
+    branch1MgrDb.collection("promotions").doc("fakeglobal").set({
+      code: "FAKEGLOBAL", discountType: "PERCENT", discountValue: 50, minOrderPkr: 0, active: true, branchId: "", branchName: "", expiresAt: null, createdAt: now, updatedAt: now,
+    })
+  );
+  await assertFails(
+    branch1MgrDb.collection("promotions").doc("branch_2_hack").set({
+      code: "HACK", discountType: "FLAT", discountValue: 100, minOrderPkr: 0, active: true, branchId: "branch_2", branchName: "Zahir Pir", expiresAt: expiresNextWeek, createdAt: now, updatedAt: now,
+    })
+  );
+  await assertFails(
+    branch1MgrDb.collection("promotions").doc("global20").update({ active: false, updatedAt: new Date(Date.now() - 800) })
+  );
+  await assertFails(
+    branch1MgrDb.collection("promotions").doc("branch_1_tmp15").update({ branchId: "branch_2", updatedAt: new Date(Date.now() - 700) })
+  );
+  await assertFails(
+    branch2MgrDb.collection("promotions").doc("branch_1_tmp15").delete()
+  );
+
+  // Branch 1 Admin creates, updates seasonal banner for branch_1 -> SUCCEEDS
+  const validBanner = {
+    branchId: "branch_1",
+    branchName: "Lahori Food Cafe TMP",
+    title: "Winter Pizza Fest",
+    subtitle: "Exclusive TMP hot deal with free drink!",
+    promoCode: "TMP15",
+    badgeText: "SEASONAL OFFER",
+    imageUrl: "https://firebasestorage.googleapis.com/v0/b/gen-lang-client-0251605363.firebasestorage.app/o/branch-banners%2Fbranch_1%2Fb1%2Fbanner.jpg?alt=media",
+    targetCategory: "EXTREME PIZZAS",
+    active: true,
+    expiresAt: expiresNextWeek,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await assertSucceeds(branch1MgrDb.collection("branch_banners").doc("banner_tmp_1").set(validBanner));
+  await assertSucceeds(branch1MgrDb.collection("branch_banners").doc("banner_tmp_1").update({ title: "Updated Winter Fest", updatedAt: new Date(Date.now() - 600) }));
+
+  // Branch 1 Admin CANNOT create banner for branch_2 or reassign branchId
+  await assertFails(branch1MgrDb.collection("branch_banners").doc("banner_b2_hack").set({ ...validBanner, branchId: "branch_2" }));
+  await assertFails(branch1MgrDb.collection("branch_banners").doc("banner_tmp_1").update({ branchId: "branch_2", updatedAt: new Date(Date.now() - 500) }));
+  await assertFails(branch2MgrDb.collection("branch_banners").doc("banner_tmp_1").delete());
+
+  // Customer can read banners & promos, CANNOT create/delete
+  await assertSucceeds(custDb.collection("branch_banners").get());
+  await assertSucceeds(custDb.collection("promotions").get());
+  await assertFails(custDb.collection("branch_banners").doc("cust_banner").set(validBanner));
+  await assertFails(custDb.collection("branch_banners").doc("banner_tmp_1").delete());
+
+  // Branch 1 Admin can delete own promo & banner
+  await assertSucceeds(branch1MgrDb.collection("promotions").doc("branch_1_tmp15").delete());
+  await assertSucceeds(branch1MgrDb.collection("branch_banners").doc("banner_tmp_1").delete());
+
+  // Revoking Branch 1 Admin immediately blocks further banner/promo creation
+  await assertSucceeds(superDb.collection("branch_admins").doc("b1.promo@gmail.com").delete());
+  await assertFails(branch1MgrDb.collection("branch_banners").doc("banner_after_revoke").set(validBanner));
+});
+
+
 
 
 

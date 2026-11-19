@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.CafeRepository
 import com.example.data.MenuImageStorageHelper
 import com.example.model.BranchAdminEntry
+import com.example.model.BranchBanner
 import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
 import com.example.model.CafeFeedback
@@ -25,6 +26,7 @@ import com.example.model.UiState
 import com.example.model.UserProfile
 import com.example.model.UserRole
 import com.google.firebase.Firebase
+import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.messaging.messaging
 import kotlinx.coroutines.CancellationException
@@ -70,6 +72,7 @@ data class SharedSessionState(
     val guestSessionId: String = "guest_${UUID.randomUUID().toString().take(8)}",
     val appliedDiscountPkr: Long = 0L,
     val appliedPromoLabel: String = "",
+    val appliedPromoBranchId: String = "",
     val pendingGuestOrder: PendingGuestOrder? = null
 ) {
     val totalItemCount: Int get() = cartItems.sumOf { it.quantity }
@@ -106,28 +109,40 @@ class SessionCartController {
         _state.value = _state.value.copy(
             cartItems = emptyList(),
             appliedDiscountPkr = 0L,
-            appliedPromoLabel = ""
+            appliedPromoLabel = "",
+            appliedPromoBranchId = ""
         )
     }
+
+    private fun SharedSessionState.sanitizePromoForBranch(newBranchId: String): SharedSessionState =
+        if (appliedPromoBranchId.isNotBlank() && appliedPromoBranchId != newBranchId) {
+            copy(appliedPromoLabel = "", appliedDiscountPkr = 0L, appliedPromoBranchId = "")
+        } else {
+            this
+        }
 
     fun setOrderType(type: OrderType) {
         _state.value = _state.value.copy(orderType = type)
     }
 
     fun selectDeliveryAddress(address: SavedAddress) {
-        _state.value = _state.value.copy(
-            orderType = OrderType.DELIVERY,
-            selectedBranchId = address.branchId,
-            selectedAddressLabel = address.label,
-            selectedAddressStreet = "${address.streetAddress}, ${address.area}"
-        )
+        _state.value = _state.value
+            .sanitizePromoForBranch(address.branchId)
+            .copy(
+                orderType = OrderType.DELIVERY,
+                selectedBranchId = address.branchId,
+                selectedAddressLabel = address.label,
+                selectedAddressStreet = "${address.streetAddress}, ${address.area}"
+            )
     }
 
     fun selectPickupBranch(branchId: String) {
-        _state.value = _state.value.copy(
-            orderType = OrderType.PICKUP,
-            selectedBranchId = branchId
-        )
+        _state.value = _state.value
+            .sanitizePromoForBranch(branchId)
+            .copy(
+                orderType = OrderType.PICKUP,
+                selectedBranchId = branchId
+            )
     }
 
     fun applyDetectedGpsLocation(
@@ -138,7 +153,7 @@ class SessionCartController {
         nearestBranchId: String,
         keepOrderType: Boolean = true
     ) {
-        val current = _state.value
+        val current = _state.value.sanitizePromoForBranch(nearestBranchId)
         _state.value = current.copy(
             orderType = if (keepOrderType) current.orderType else OrderType.DELIVERY,
             selectedBranchId = nearestBranchId,
@@ -155,12 +170,14 @@ class SessionCartController {
         area: String,
         branchId: String
     ) {
-        _state.value = _state.value.copy(
-            orderType = OrderType.DELIVERY,
-            selectedBranchId = branchId,
-            selectedAddressLabel = area,
-            selectedAddressStreet = area
-        )
+        _state.value = _state.value
+            .sanitizePromoForBranch(branchId)
+            .copy(
+                orderType = OrderType.DELIVERY,
+                selectedBranchId = branchId,
+                selectedAddressLabel = area,
+                selectedAddressStreet = area
+            )
     }
 
     fun clearGpsLocation() {
@@ -187,13 +204,15 @@ class SessionCartController {
             branchId = branch.id,
             branchName = branch.name
         )
-        _state.value = _state.value.copy(
-            guestAddresses = listOf(addr) + _state.value.guestAddresses,
-            orderType = OrderType.DELIVERY,
-            selectedBranchId = addr.branchId,
-            selectedAddressLabel = addr.label,
-            selectedAddressStreet = "${addr.streetAddress}, ${addr.area}"
-        )
+        _state.value = _state.value
+            .sanitizePromoForBranch(addr.branchId)
+            .copy(
+                guestAddresses = listOf(addr) + _state.value.guestAddresses,
+                orderType = OrderType.DELIVERY,
+                selectedBranchId = addr.branchId,
+                selectedAddressLabel = addr.label,
+                selectedAddressStreet = "${addr.streetAddress}, ${addr.area}"
+            )
         return addr
     }
 
@@ -204,17 +223,19 @@ class SessionCartController {
         )
     }
 
-    fun applyPromo(label: String, discountPkr: Long) {
+    fun applyPromo(label: String, discountPkr: Long, branchId: String = "") {
         _state.value = _state.value.copy(
             appliedPromoLabel = label,
-            appliedDiscountPkr = discountPkr
+            appliedDiscountPkr = discountPkr,
+            appliedPromoBranchId = branchId
         )
     }
 
     fun clearPromo() {
         _state.value = _state.value.copy(
             appliedPromoLabel = "",
-            appliedDiscountPkr = 0L
+            appliedDiscountPkr = 0L,
+            appliedPromoBranchId = ""
         )
     }
 
@@ -257,6 +278,12 @@ class LahoriViewModel(
 
     private val _isSavingMenuItem = MutableStateFlow(false)
     val isSavingMenuItem: StateFlow<Boolean> = _isSavingMenuItem.asStateFlow()
+
+    private val _isSavingBranchPromo = MutableStateFlow(false)
+    val isSavingBranchPromo: StateFlow<Boolean> = _isSavingBranchPromo.asStateFlow()
+
+    private val _isSavingBranchBanner = MutableStateFlow(false)
+    val isSavingBranchBanner: StateFlow<Boolean> = _isSavingBranchBanner.asStateFlow()
 
     private val _branchAssignmentLoaded = MutableStateFlow(isSuperAdminByEmail || currentUserEmail.isBlank())
     val branchAssignmentLoaded: StateFlow<Boolean> = _branchAssignmentLoaded.asStateFlow()
@@ -481,16 +508,54 @@ class LahoriViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
+    // Live promotions readable by signed-in customers (branch-filtered in UI) and admins
+    val promotionsList: StateFlow<List<Promotion>> = repository.observePromotions()
+        .catch { error ->
+            val firestoreError = unwrapFirestoreException(error)
+            if (firestoreError == null && error is CancellationException) throw error
+            Log.w(TAG, "Promotions stream error", firestoreError ?: error)
+            emit(emptyList())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    // Live seasonal banners readable by signed-in customers (filtered strictly to selectedBranchId)
+    val allBranchBanners: StateFlow<List<BranchBanner>> = repository.observeAllBranchBanners()
+        .catch { error ->
+            val firestoreError = unwrapFirestoreException(error)
+            if (firestoreError == null && error is CancellationException) throw error
+            Log.w(TAG, "Branch banners stream error", firestoreError ?: error)
+            emit(emptyList())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
     @Suppress("OPT_IN_USAGE")
-    val promotionsList: StateFlow<List<Promotion>> = effectiveRole
-        .flatMapLatest { role ->
-            if (role != UserRole.SuperAdmin) {
+    val branchAdminPromotions: StateFlow<List<Promotion>> = branchAdminAssignment
+        .flatMapLatest { assignment ->
+            if (assignment == null) {
                 flowOf(emptyList())
             } else {
-                repository.observePromotions()
+                repository.observeBranchPromotions(assignment.branchId)
                     .catch { error ->
                         val firestoreError = unwrapFirestoreException(error)
                         if (firestoreError == null && error is CancellationException) throw error
+                        Log.w(TAG, "Branch admin promotions stream error", firestoreError ?: error)
+                        emit(emptyList())
+                    }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    @Suppress("OPT_IN_USAGE")
+    val branchAdminBanners: StateFlow<List<BranchBanner>> = branchAdminAssignment
+        .flatMapLatest { assignment ->
+            if (assignment == null) {
+                flowOf(emptyList())
+            } else {
+                repository.observeBranchBanners(assignment.branchId)
+                    .catch { error ->
+                        val firestoreError = unwrapFirestoreException(error)
+                        if (firestoreError == null && error is CancellationException) throw error
+                        Log.w(TAG, "Branch admin banners stream error", firestoreError ?: error)
                         emit(emptyList())
                     }
             }
@@ -861,11 +926,17 @@ class LahoriViewModel(
         code: String,
         onResult: (success: Boolean, message: String) -> Unit
     ) {
-        val subtotal = sessionCart.state.value.subtotalPkr
+        val currentSession = sessionCart.state.value
+        val subtotal = currentSession.subtotalPkr
+        val selectedBranchId = currentSession.selectedBranchId
         viewModelScope.launch {
-            val res = repository.validatePromoCode(code, subtotal)
+            val res = repository.validatePromoCode(
+                rawCode = code,
+                subtotalPkr = subtotal,
+                selectedBranchId = selectedBranchId
+            )
             res.onSuccess { (promo, discount) ->
-                sessionCart.applyPromo(promo.code, discount)
+                sessionCart.applyPromo(promo.code, discount, promo.branchId)
                 val desc = if (promo.discountType.equals("PERCENT", ignoreCase = true)) {
                     "${promo.discountValue}% off (-${discount} PKR)"
                 } else {
@@ -1059,12 +1130,35 @@ class LahoriViewModel(
         discountValue: Long,
         minOrderPkr: Long,
         active: Boolean,
+        branchId: String = "",
+        branchName: String = "",
+        expiresAt: Timestamp? = null,
+        promoDocId: String? = null,
+        onError: (String) -> Unit = {},
         onDone: () -> Unit
     ) {
+        if (_isSavingBranchPromo.value) return
+        _isSavingBranchPromo.value = true
         viewModelScope.launch {
-            val res = repository.savePromotion(code, discountType, discountValue, minOrderPkr, active)
-            res.onSuccess { onDone() }.onFailure { err ->
-                _actionError.value = err.localizedMessage ?: "Failed to save promo code"
+            try {
+                val res = repository.savePromotion(
+                    code = code,
+                    discountType = discountType,
+                    discountValue = discountValue,
+                    minOrderPkr = minOrderPkr,
+                    active = active,
+                    branchId = branchId,
+                    branchName = branchName,
+                    expiresAt = expiresAt,
+                    promoDocId = promoDocId
+                )
+                res.onSuccess { onDone() }.onFailure { err ->
+                    val msg = err.localizedMessage ?: "Failed to save promo code"
+                    _actionError.value = msg
+                    onError(msg)
+                }
+            } finally {
+                _isSavingBranchPromo.value = false
             }
         }
     }
@@ -1074,6 +1168,81 @@ class LahoriViewModel(
             val res = repository.deletePromotion(promoId)
             if (res.isFailure) {
                 _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Failed to delete promo code"
+            }
+        }
+    }
+
+    fun saveBranchBanner(
+        context: Context,
+        bannerId: String?,
+        branchId: String,
+        branchName: String,
+        title: String,
+        subtitle: String,
+        promoCode: String,
+        badgeText: String,
+        imageUrl: String,
+        pickedImageUri: Uri?,
+        targetCategory: String,
+        active: Boolean,
+        expiresAt: Timestamp?,
+        onError: (String) -> Unit = {},
+        onDone: () -> Unit
+    ) {
+        if (_isSavingBranchBanner.value) return
+        _isSavingBranchBanner.value = true
+        viewModelScope.launch {
+            try {
+                val targetBannerId = bannerId?.takeIf { it.isNotBlank() } ?: repository.allocateBranchBannerId()
+                var resolvedImageUrl = imageUrl.trim()
+
+                if (pickedImageUri != null) {
+                    val uploadRes = MenuImageStorageHelper.uploadBranchBannerImage(
+                        context = context.applicationContext,
+                        branchId = branchId,
+                        bannerId = targetBannerId,
+                        imageUri = pickedImageUri
+                    )
+                    if (uploadRes.isFailure) {
+                        val msg = uploadRes.exceptionOrNull()?.localizedMessage
+                            ?: "Failed to upload seasonal banner image"
+                        _actionError.value = msg
+                        onError(msg)
+                        return@launch
+                    }
+                    resolvedImageUrl = uploadRes.getOrThrow()
+                }
+
+                val res = repository.saveBranchBanner(
+                    bannerId = bannerId,
+                    branchId = branchId,
+                    branchName = branchName,
+                    title = title,
+                    subtitle = subtitle,
+                    promoCode = promoCode,
+                    badgeText = badgeText,
+                    imageUrl = resolvedImageUrl,
+                    targetCategory = targetCategory,
+                    active = active,
+                    expiresAt = expiresAt,
+                    preAllocatedId = targetBannerId
+                )
+                res.onSuccess { onDone() }.onFailure { err ->
+                    val msg = err.localizedMessage ?: "Failed to save seasonal banner"
+                    _actionError.value = msg
+                    onError(msg)
+                }
+            } finally {
+                _isSavingBranchBanner.value = false
+            }
+        }
+    }
+
+    fun deleteBranchBanner(bannerId: String) {
+        viewModelScope.launch {
+            val res = repository.deleteBranchBanner(bannerId)
+            if (res.isFailure) {
+                _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Failed to delete seasonal banner"
             }
         }
     }

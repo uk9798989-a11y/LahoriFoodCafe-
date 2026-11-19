@@ -646,6 +646,9 @@ private fun AuthenticatedCafeShell(
     val superAdminOrdersState by viewModel.superAdminOrdersState.collectAsStateWithLifecycle()
     val allBranchAdmins by viewModel.allBranchAdmins.collectAsStateWithLifecycle()
     val promotionsList by viewModel.promotionsList.collectAsStateWithLifecycle()
+    val allBranchBanners by viewModel.allBranchBanners.collectAsStateWithLifecycle()
+    val branchAdminPromotions by viewModel.branchAdminPromotions.collectAsStateWithLifecycle()
+    val branchAdminBanners by viewModel.branchAdminBanners.collectAsStateWithLifecycle()
     val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
     val allFeedback by viewModel.allFeedback.collectAsStateWithLifecycle()
     val pendingSurveyOrder by viewModel.pendingSurveyOrder.collectAsStateWithLifecycle()
@@ -654,6 +657,8 @@ private fun AuthenticatedCafeShell(
     val isSavingStaff by viewModel.isSavingStaff.collectAsStateWithLifecycle()
     val isSavingBranch by viewModel.isSavingBranch.collectAsStateWithLifecycle()
     val isSavingMenuItem by viewModel.isSavingMenuItem.collectAsStateWithLifecycle()
+    val isSavingBranchPromo by viewModel.isSavingBranchPromo.collectAsStateWithLifecycle()
+    val isSavingBranchBanner by viewModel.isSavingBranchBanner.collectAsStateWithLifecycle()
     val branchAssignmentLoaded by viewModel.branchAssignmentLoaded.collectAsStateWithLifecycle()
     val trackedOrderState by viewModel.trackedOrderState.collectAsStateWithLifecycle()
     val fcmTokenRegistered by viewModel.fcmTokenRegistered.collectAsStateWithLifecycle()
@@ -804,6 +809,22 @@ private fun AuthenticatedCafeShell(
     }
     val activeOrderCount = activeOrdersList.size
 
+    // Strict branch-specific filtering for customer-facing seasonal banners & temporary promo codes
+    val selectedBranchLabel = remember(sessionState.selectedBranchId, branchesList) {
+        BranchDirectory.shortPickerLabel(sessionState.selectedBranchId, branchesList)
+    }
+    val selectedBranchBanners = remember(allBranchBanners, sessionState.selectedBranchId) {
+        val now = System.currentTimeMillis()
+        allBranchBanners.filter { it.isVisibleForBranch(sessionState.selectedBranchId, now) }
+    }
+    val selectedBranchPromos = remember(promotionsList, sessionState.selectedBranchId) {
+        val now = System.currentTimeMillis()
+        promotionsList.filter {
+            it.branchId == sessionState.selectedBranchId &&
+                it.isCurrentlyValidForBranch(sessionState.selectedBranchId, now)
+        }
+    }
+
     val isSuperAdminUser =
         (userEmail.equals(SUPER_ADMIN_EMAIL, ignoreCase = true) && isEmailVerified) ||
             effectiveRole == UserRole.SuperAdmin
@@ -871,7 +892,14 @@ private fun AuthenticatedCafeShell(
             },
             onRemoveBranchAdmin = { viewModel.removeBranchManager(it) },
             onSavePromotion = { code, discountType, discountValue, minOrderPkr, active, done ->
-                viewModel.savePromotion(code, discountType, discountValue, minOrderPkr, active, done)
+                viewModel.savePromotion(
+                    code = code,
+                    discountType = discountType,
+                    discountValue = discountValue,
+                    minOrderPkr = minOrderPkr,
+                    active = active,
+                    onDone = done
+                )
             },
             onDeletePromotion = { viewModel.deletePromotion(it) },
             onBack = { showSuperAdminDashboard = false }
@@ -920,7 +948,63 @@ private fun AuthenticatedCafeShell(
                 },
                 branches = branchesList,
                 newOrderAlert = newBranchOrderAlert,
-                onDismissNewOrderAlert = { viewModel.dismissNewBranchOrderAlert() }
+                onDismissNewOrderAlert = { viewModel.dismissNewBranchOrderAlert() },
+                branchPromotions = branchAdminPromotions,
+                branchBanners = branchAdminBanners,
+                isSavingBranchPromo = isSavingBranchPromo,
+                isSavingBranchBanner = isSavingBranchBanner,
+                onSaveBranchPromo = { promoDocId, code, discountType, discountValue, minOrderPkr, active, expiresAt, onError, onDone ->
+                    viewModel.savePromotion(
+                        code = code,
+                        discountType = discountType,
+                        discountValue = discountValue,
+                        minOrderPkr = minOrderPkr,
+                        active = active,
+                        branchId = assignedBranchEntry.branchId,
+                        branchName = assignedBranchEntry.branchName,
+                        expiresAt = expiresAt,
+                        promoDocId = promoDocId,
+                        onError = onError,
+                        onDone = {
+                            onDone()
+                            scope.launch {
+                                snackbarHostState.showSnackbar("Saved branch promo $code")
+                            }
+                        }
+                    )
+                },
+                onDeleteBranchPromo = { promoId ->
+                    viewModel.deletePromotion(promoId)
+                    scope.launch { snackbarHostState.showSnackbar("Promo code deleted") }
+                },
+                onSaveBranchBanner = { bannerId, title, subtitle, promoCode, badgeText, imageUrl, pickedUri, targetCategory, active, expiresAt, onError, onDone ->
+                    viewModel.saveBranchBanner(
+                        context = context,
+                        bannerId = bannerId,
+                        branchId = assignedBranchEntry.branchId,
+                        branchName = assignedBranchEntry.branchName,
+                        title = title,
+                        subtitle = subtitle,
+                        promoCode = promoCode,
+                        badgeText = badgeText,
+                        imageUrl = imageUrl,
+                        pickedImageUri = pickedUri,
+                        targetCategory = targetCategory,
+                        active = active,
+                        expiresAt = expiresAt,
+                        onError = onError,
+                        onDone = {
+                            onDone()
+                            scope.launch {
+                                snackbarHostState.showSnackbar("Seasonal banner published for ${assignedBranchEntry.branchName}")
+                            }
+                        }
+                    )
+                },
+                onDeleteBranchBanner = { bannerId ->
+                    viewModel.deleteBranchBanner(bannerId)
+                    scope.launch { snackbarHostState.showSnackbar("Seasonal banner removed") }
+                }
             )
             SnackbarHost(
                 hostState = snackbarHostState,
@@ -942,7 +1026,47 @@ private fun AuthenticatedCafeShell(
             managerEmail = userEmail,
             branches = branchesList,
             newOrderAlert = newBranchOrderAlert,
-            onDismissNewOrderAlert = { viewModel.dismissNewBranchOrderAlert() }
+            onDismissNewOrderAlert = { viewModel.dismissNewBranchOrderAlert() },
+            branchPromotions = branchAdminPromotions,
+            branchBanners = branchAdminBanners,
+            isSavingBranchPromo = isSavingBranchPromo,
+            isSavingBranchBanner = isSavingBranchBanner,
+            onSaveBranchPromo = { promoDocId, code, discountType, discountValue, minOrderPkr, active, expiresAt, onError, onDone ->
+                viewModel.savePromotion(
+                    code = code,
+                    discountType = discountType,
+                    discountValue = discountValue,
+                    minOrderPkr = minOrderPkr,
+                    active = active,
+                    branchId = assignedBranchEntry.branchId,
+                    branchName = assignedBranchEntry.branchName,
+                    expiresAt = expiresAt,
+                    promoDocId = promoDocId,
+                    onError = onError,
+                    onDone = onDone
+                )
+            },
+            onDeleteBranchPromo = { viewModel.deletePromotion(it) },
+            onSaveBranchBanner = { bannerId, title, subtitle, promoCode, badgeText, imageUrl, pickedUri, targetCategory, active, expiresAt, onError, onDone ->
+                viewModel.saveBranchBanner(
+                    context = context,
+                    bannerId = bannerId,
+                    branchId = assignedBranchEntry.branchId,
+                    branchName = assignedBranchEntry.branchName,
+                    title = title,
+                    subtitle = subtitle,
+                    promoCode = promoCode,
+                    badgeText = badgeText,
+                    imageUrl = imageUrl,
+                    pickedImageUri = pickedUri,
+                    targetCategory = targetCategory,
+                    active = active,
+                    expiresAt = expiresAt,
+                    onError = onError,
+                    onDone = onDone
+                )
+            },
+            onDeleteBranchBanner = { viewModel.deleteBranchBanner(it) }
         )
         return
     }
@@ -1036,6 +1160,27 @@ private fun AuthenticatedCafeShell(
                         scope.launch {
                             snackbarHostState.currentSnackbarData?.dismiss()
                             snackbarHostState.showSnackbar("Added ${item.name} to Bucket")
+                        }
+                    },
+                    selectedBranchLabel = selectedBranchLabel,
+                    branchBanners = selectedBranchBanners,
+                    branchPromos = selectedBranchPromos,
+                    appliedPromoCode = sessionState.appliedPromoLabel,
+                    onApplyBranchPromo = { code ->
+                        if (sessionState.cartItems.isEmpty()) {
+                            scope.launch {
+                                snackbarHostState.currentSnackbarData?.dismiss()
+                                snackbarHostState.showSnackbar(
+                                    "Add items to your bucket first, then tap $code at checkout!"
+                                )
+                            }
+                        } else {
+                            viewModel.validateAndApplyPromoCode(code) { _, msg ->
+                                scope.launch {
+                                    snackbarHostState.currentSnackbarData?.dismiss()
+                                    snackbarHostState.showSnackbar(msg)
+                                }
+                            }
                         }
                     }
                 )
@@ -1265,7 +1410,8 @@ private fun AuthenticatedCafeShell(
                 }
             },
             onDismiss = { showBucketSheet = false },
-            branches = branchesList
+            branches = branchesList,
+            branchPromos = selectedBranchPromos
         )
     }
 

@@ -69,6 +69,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
@@ -91,6 +92,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.MenuImageStorageHelper
 import com.example.model.BranchAdminEntry
+import com.example.model.BranchBanner
 import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
 import com.example.model.CafeFeedback
@@ -103,6 +105,7 @@ import com.example.model.Promotion
 import com.example.model.SUPER_ADMIN_EMAIL
 import com.example.model.SeedMenuData
 import com.example.model.UiState
+import com.google.firebase.Timestamp
 import com.example.model.UserRole
 import com.example.ui.components.FoodArtworkBox
 import com.example.ui.components.formatPkr
@@ -540,15 +543,28 @@ fun SuperAdminDashboardScreen(
                                             } else {
                                                 "${formatPkr(promo.discountValue)} OFF"
                                             }
+                                            val scopeLabel = if (promo.isGlobal()) {
+                                                "ALL BRANCHES"
+                                            } else {
+                                                BranchDirectory.shortPickerLabel(promo.branchId, branches)
+                                                    .ifBlank { promo.branchName.ifBlank { promo.branchId } }
+                                                    .uppercase()
+                                            }
+                                            val expiryLabel = formatPromoExpiryLabel(promo.expiresAt)
+                                            val isExpired = promo.isExpired()
                                             Text(
                                                 text = "${promo.code} • $discountLabel",
                                                 style = MaterialTheme.typography.titleSmall,
                                                 color = MaterialTheme.colorScheme.onSurface
                                             )
                                             Text(
-                                                text = "Min order: ${formatPkr(promo.minOrderPkr)} • ${if (promo.active) "Active" else "Paused"}",
+                                                text = "$scopeLabel • Min ${formatPkr(promo.minOrderPkr)} • ${if (isExpired) "Expired" else if (promo.active) "Active" else "Paused"} ($expiryLabel)",
                                                 style = MaterialTheme.typography.bodySmall,
-                                                color = if (promo.active) LahoriSuccess else MaterialTheme.colorScheme.onSurfaceVariant
+                                                color = when {
+                                                    isExpired -> LahoriRed
+                                                    promo.active -> LahoriSuccess
+                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                }
                                             )
                                         }
                                         Row {
@@ -1720,17 +1736,54 @@ fun BranchAdminDashboardScreen(
     onSignOut: (() -> Unit)? = null,
     branches: List<CafeBranch> = BranchDirectory.defaultBranches,
     newOrderAlert: CafeOrder? = null,
-    onDismissNewOrderAlert: () -> Unit = {}
+    onDismissNewOrderAlert: () -> Unit = {},
+    branchPromotions: List<Promotion> = emptyList(),
+    branchBanners: List<BranchBanner> = emptyList(),
+    isSavingBranchPromo: Boolean = false,
+    isSavingBranchBanner: Boolean = false,
+    onSaveBranchPromo: (
+        promoDocId: String?,
+        code: String,
+        discountType: String,
+        discountValue: Long,
+        minOrderPkr: Long,
+        active: Boolean,
+        expiresAt: Timestamp?,
+        onError: (String) -> Unit,
+        onDone: () -> Unit
+    ) -> Unit = { _, _, _, _, _, _, _, _, onDone -> onDone() },
+    onDeleteBranchPromo: (String) -> Unit = {},
+    onSaveBranchBanner: (
+        bannerId: String?,
+        title: String,
+        subtitle: String,
+        promoCode: String,
+        badgeText: String,
+        imageUrl: String,
+        pickedImageUri: Uri?,
+        targetCategory: String,
+        active: Boolean,
+        expiresAt: Timestamp?,
+        onError: (String) -> Unit,
+        onDone: () -> Unit
+    ) -> Unit = { _, _, _, _, _, _, _, _, _, _, _, onDone -> onDone() },
+    onDeleteBranchBanner: (String) -> Unit = {}
 ) {
     val isRestrictedRootMode = onSignOut != null
     if (!isRestrictedRootMode) {
         BackHandler(onBack = onBack)
     }
 
+    var selectedTab by remember { mutableIntStateOf(0) }
     var orderFilter by remember { mutableStateOf("ALL") }
     val branchLabel = remember(branchId, branches, branchName) {
         BranchDirectory.shortPickerLabel(branchId, branches)
             .ifBlank { branchName.substringAfter("— ").trim().ifBlank { branchId } }
+    }
+    val livePromoCount = remember(branchPromotions, branchBanners, branchId) {
+        val now = System.currentTimeMillis()
+        branchPromotions.count { it.isCurrentlyValidForBranch(branchId, now) } +
+            branchBanners.count { it.isVisibleForBranch(branchId, now) }
     }
 
     Scaffold(
@@ -1787,7 +1840,7 @@ fun BranchAdminDashboardScreen(
                             )
                             if (managerEmail.isNotBlank()) {
                                 Text(
-                                    text = "$managerEmail • Live Orders Only",
+                                    text = "$managerEmail • Branch Orders & Promos",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = LahoriWhite.copy(alpha = 0.72f)
                                 )
@@ -1817,7 +1870,68 @@ fun BranchAdminDashboardScreen(
                             }
                         }
                     }
-                    HorizontalDivider(color = LahoriRed, thickness = 2.dp)
+
+                    TabRow(
+                        selectedTabIndex = selectedTab,
+                        containerColor = LahoriBlack,
+                        contentColor = LahoriWhite,
+                        indicator = { tabPositions ->
+                            if (selectedTab < tabPositions.size) {
+                                TabRowDefaults.SecondaryIndicator(
+                                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                                    color = LahoriRed,
+                                    height = 3.dp
+                                )
+                            }
+                        }
+                    ) {
+                        Tab(
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            modifier = Modifier.testTag("branch_admin_tab_orders"),
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.ReceiptLong,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (selectedTab == 0) LahoriGold else LahoriWhite.copy(alpha = 0.7f)
+                                    )
+                                    Text(
+                                        text = "ORDERS",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = if (selectedTab == 0) LahoriWhite else LahoriWhite.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                        )
+                        Tab(
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            modifier = Modifier.testTag("branch_admin_tab_promos"),
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.LocalOffer,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (selectedTab == 1) LahoriGold else LahoriWhite.copy(alpha = 0.7f)
+                                    )
+                                    Text(
+                                        text = if (livePromoCount > 0) "PROMOS ($livePromoCount)" else "PROMOS",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = if (selectedTab == 1) LahoriWhite else LahoriWhite.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -1828,7 +1942,21 @@ fun BranchAdminDashboardScreen(
                 .padding(padding)
                 .navigationBarsPadding()
         ) {
-            when (ordersState) {
+            if (selectedTab == 1) {
+                BranchPromoManagerTab(
+                    branchId = branchId,
+                    branchName = branchName,
+                    branchLabel = branchLabel,
+                    branchPromotions = branchPromotions,
+                    branchBanners = branchBanners,
+                    isSavingPromo = isSavingBranchPromo,
+                    isSavingBanner = isSavingBranchBanner,
+                    onSaveBranchPromo = onSaveBranchPromo,
+                    onDeleteBranchPromo = onDeleteBranchPromo,
+                    onSaveBranchBanner = onSaveBranchBanner,
+                    onDeleteBranchBanner = onDeleteBranchBanner
+                )
+            } else when (ordersState) {
                 is UiState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = LahoriRed)
                 }
