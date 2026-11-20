@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import com.example.BuildConfig
 import com.example.R
+import com.example.model.AdminDeliveryNotification
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchBanner
 import com.example.model.BranchDirectory
@@ -361,8 +362,7 @@ class CafeRepository(
         return try {
             requireUserId()
             val existingSnap = db.collection(path).get().await()
-            val existingDocsById = existingSnap.documents.associateBy { it.id }
-            val existingIds = existingDocsById.keys
+            val existingIds = existingSnap.documents.map { it.id }.toSet()
             val hasNewCatalog = existingIds.any { it.startsWith("lfc_") }
 
             val legacyToDelete = if (!hasNewCatalog) {
@@ -374,17 +374,8 @@ class CafeRepository(
                 val docId = item.id.removePrefix("seed_")
                 !existingIds.contains(docId)
             }
-            // Upgrade existing lfc_* seed docs that still have generic artwork keys (pre-PDF menu)
-            // so their updated PDF names, prices, descriptions, and real menu_* imageKeys sync cleanly
-            // while preserving any custom uploaded imageUrl or available toggle set by Super Admin.
-            val seedItemsToUpgrade = SeedMenuData.initialItems.filter { item ->
-                val docId = item.id.removePrefix("seed_")
-                val existingDoc = existingDocsById[docId] ?: return@filter false
-                val existingImageKey = existingDoc.getString("imageKey").orEmpty()
-                !existingImageKey.startsWith("menu_")
-            }
 
-            if (legacyToDelete.isEmpty() && missingSeedItems.isEmpty() && seedItemsToUpgrade.isEmpty()) {
+            if (legacyToDelete.isEmpty() && missingSeedItems.isEmpty()) {
                 return Result.success(Unit)
             }
 
@@ -413,7 +404,6 @@ class CafeRepository(
                     "category" to item.category.trim().take(40),
                     "pricePkr" to item.pricePkr,
                     "imageKey" to item.imageKey.trim().take(50),
-                    "imageUrl" to "",
                     "badgeText" to item.badgeText.trim().take(30),
                     "available" to item.available,
                     "sortOrder" to item.sortOrder.coerceIn(0L, 10000L),
@@ -421,24 +411,6 @@ class CafeRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 batch.set(docRef, payload)
-                opsInBatch++
-                flushIfNeeded()
-            }
-
-            for (item in seedItemsToUpgrade) {
-                val docId = item.id.removePrefix("seed_")
-                val docRef = db.collection(path).document(docId)
-                val updates = mapOf(
-                    "name" to item.name.trim().take(80),
-                    "description" to item.description.trim().take(300),
-                    "category" to item.category.trim().take(40),
-                    "pricePkr" to item.pricePkr,
-                    "imageKey" to item.imageKey.trim().take(50),
-                    "badgeText" to item.badgeText.trim().take(30),
-                    "sortOrder" to item.sortOrder.coerceIn(0L, 10000L),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                batch.update(docRef, updates)
                 opsInBatch++
                 flushIfNeeded()
             }
@@ -747,7 +719,8 @@ class CafeRepository(
         userId: String,
         label: String,
         streetAddress: String,
-        area: String,
+        area: String = "",
+        landmark: String = "",
         knownBranches: List<CafeBranch> = emptyList()
     ): Result<SavedAddress> {
         val path = "users/$userId/addresses"
@@ -755,10 +728,9 @@ class CafeRepository(
             val uid = requireUserId()
             check(uid == userId)
             val cleanLabel = label.trim().ifBlank { "Home" }.take(40)
-            val cleanStreet = streetAddress.trim().take(200)
-            val cleanArea = area.trim().take(60)
-            require(cleanStreet.length >= 3) { "Please enter a street address (min 3 characters)" }
-            require(cleanArea.isNotBlank()) { "Please enter a neighborhood/area" }
+            val cleanStreet = streetAddress.trim().take(300)
+            val cleanLandmark = landmark.trim().take(120)
+            require(cleanStreet.length >= 3) { "Please enter your complete delivery address (min 3 characters)" }
 
             val activeBranches = knownBranches.ifEmpty {
                 try {
@@ -771,12 +743,14 @@ class CafeRepository(
                 }
             }.ifEmpty { BranchDirectory.defaultBranches }
 
-            val routedBranch = BranchDirectory.routeAddressToBranch("$cleanArea $cleanStreet", activeBranches)
+            val routedBranch = BranchDirectory.routeAddressToBranch("$area $cleanStreet $cleanLandmark", activeBranches)
+            val cleanArea = area.trim().ifBlank { routedBranch.displayShortLabel() }.take(80)
             val docRef = db.collection("users").document(uid).collection("addresses").document()
             val payload = mapOf(
                 "label" to cleanLabel,
                 "streetAddress" to cleanStreet,
                 "area" to cleanArea,
+                "landmark" to cleanLandmark,
                 "branchId" to routedBranch.id,
                 "branchName" to routedBranch.name,
                 "createdAt" to FieldValue.serverTimestamp(),
@@ -789,6 +763,7 @@ class CafeRepository(
                     label = cleanLabel,
                     streetAddress = cleanStreet,
                     area = cleanArea,
+                    landmark = cleanLandmark,
                     branchId = routedBranch.id,
                     branchName = routedBranch.name
                 )
@@ -797,6 +772,85 @@ class CafeRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.CREATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateSavedAddress(
+        userId: String,
+        addressId: String,
+        label: String,
+        streetAddress: String,
+        area: String = "",
+        landmark: String = "",
+        knownBranches: List<CafeBranch> = emptyList()
+    ): Result<SavedAddress> {
+        val path = "users/$userId/addresses/$addressId"
+        return try {
+            val uid = requireUserId()
+            check(uid == userId)
+            require(addressId.isNotBlank()) { "Address ID is required" }
+            val cleanLabel = label.trim().ifBlank { "Home" }.take(40)
+            val cleanStreet = streetAddress.trim().take(300)
+            val cleanLandmark = landmark.trim().take(120)
+            require(cleanStreet.length >= 3) { "Please enter your complete delivery address (min 3 characters)" }
+
+            val activeBranches = knownBranches.ifEmpty {
+                try {
+                    db.collection("branches").get().await()
+                        .toObjects(CafeBranch::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            }.ifEmpty { BranchDirectory.defaultBranches }
+
+            val routedBranch = BranchDirectory.routeAddressToBranch("$area $cleanStreet $cleanLandmark", activeBranches)
+            val cleanArea = area.trim().ifBlank { routedBranch.displayShortLabel() }.take(80)
+            val docRef = db.collection("users").document(uid).collection("addresses").document(addressId)
+            docRef.update(
+                mapOf(
+                    "label" to cleanLabel,
+                    "streetAddress" to cleanStreet,
+                    "area" to cleanArea,
+                    "landmark" to cleanLandmark,
+                    "branchId" to routedBranch.id,
+                    "branchName" to routedBranch.name,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(
+                SavedAddress(
+                    id = addressId,
+                    label = cleanLabel,
+                    streetAddress = cleanStreet,
+                    area = cleanArea,
+                    landmark = cleanLandmark,
+                    branchId = routedBranch.id,
+                    branchName = routedBranch.name
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteSavedAddress(userId: String, addressId: String): Result<Unit> {
+        val path = "users/$userId/addresses/$addressId"
+        return try {
+            val uid = requireUserId()
+            check(uid == userId)
+            require(addressId.isNotBlank()) { "Address ID is required" }
+            db.collection("users").document(uid).collection("addresses").document(addressId).delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
             Result.failure(e)
         }
     }
@@ -1082,7 +1136,7 @@ class CafeRepository(
             require(cartItems.isNotEmpty()) { "Your bucket is empty" }
             val cleanName = customerName.trim().ifBlank { user.displayName ?: "Lahori Guest" }.take(80)
             val cleanPhone = customerPhone.trim().take(30)
-            val cleanAddress = deliveryAddress.trim().take(250)
+            val cleanAddress = deliveryAddress.trim().take(350)
             val cleanPromo = promoCode.trim().uppercase().take(30)
             val branch = resolveBranch(branchId)
 
@@ -1103,9 +1157,10 @@ class CafeRepository(
                 )
             }
             val subtotal = lineItems.sumOf { it.lineTotalPkr }.coerceAtLeast(1L)
-            val deliveryFee = if (orderType == OrderType.DELIVERY) 150L else 0L
+            // FREE DELIVERY permanently: Rs. 0 for every customer and every order
+            val deliveryFee = 0L
             val appliedDiscount = discountPkr.coerceIn(0L, subtotal)
-            val total = (subtotal + deliveryFee - appliedDiscount).coerceAtLeast(1L)
+            val total = (subtotal - appliedDiscount).coerceAtLeast(1L)
             val summary = lineItems.joinToString(", ") { "${it.quantity}x ${it.name}" }.take(300)
 
             val docRef = db.collection("orders").document()
@@ -1150,9 +1205,128 @@ class CafeRepository(
         return try {
             requireUserId()
             require(orderId.isNotBlank()) { "Order ID required" }
-            db.collection("orders").document(orderId).update(
+            val orderRef = db.collection("orders").document(orderId)
+            val existingSnap = if (newStatus == OrderStatus.Delivered) {
+                orderRef.get().await()
+            } else {
+                null
+            }
+            val existingOrder = existingSnap?.toObject(
+                CafeOrder::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            )
+            val wasAlreadyDelivered = existingOrder != null &&
+                OrderStatus.fromString(existingOrder.status) == OrderStatus.Delivered
+
+            orderRef.update(
                 mapOf(
                     "status" to newStatus.name,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+
+            // Immediately persist a deduplicated Admin Delivery Notification when transitioning to Delivered
+            if (newStatus == OrderStatus.Delivered && existingOrder != null && !wasAlreadyDelivered) {
+                val notifId = "delivered_${orderId.replace(Regex("[^a-zA-Z0-9_\\-]"), "_")}".take(128)
+                val notifRef = db.collection("admin_notifications").document(notifId)
+                try {
+                    val existingNotif = notifRef.get().await()
+                    if (!existingNotif.exists()) {
+                        val orderNum = "#${orderId.takeLast(6).uppercase()}"
+                        val notifPayload = mapOf(
+                            "orderId" to orderId.take(128),
+                            "orderNumber" to orderNum.take(20),
+                            "branchId" to existingOrder.branchId.ifBlank { BranchDirectory.branch1.id },
+                            "branchName" to existingOrder.branchName.ifBlank { BranchDirectory.branch1.name }.take(80),
+                            "customerName" to existingOrder.customerName.ifBlank { "Customer" }.take(80),
+                            "customerPhone" to existingOrder.customerPhone.take(30),
+                            "deliveryAddress" to existingOrder.deliveryAddress.take(350),
+                            "totalPkr" to existingOrder.totalPkr.coerceAtLeast(1L),
+                            "orderType" to if (existingOrder.orderType.equals(OrderType.PICKUP.name, ignoreCase = true)) {
+                                OrderType.PICKUP.name
+                            } else {
+                                OrderType.DELIVERY.name
+                            },
+                            "itemsSummary" to existingOrder.itemsSummary.ifBlank { "Order items" }.take(300),
+                            "title" to "🎉 Order Successfully Delivered!",
+                            "message" to "The order has been successfully delivered to the customer.",
+                            "read" to false,
+                            "deliveredAt" to FieldValue.serverTimestamp(),
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                        notifRef.set(notifPayload).await()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    handleFirestoreError(e, OperationType.CREATE, "admin_notifications/$notifId")
+                }
+            }
+
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    // 5B. Persistent Real-Time Admin Delivery Notifications
+    fun observeAllAdminNotifications(): Flow<List<AdminDeliveryNotification>> {
+        val path = "admin_notifications"
+        return db.collection(path)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(
+                    AdminDeliveryNotification::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ).sortedByDescending { it.deliveredAt ?: it.createdAt ?: Timestamp(0, 0) }
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
+    }
+
+    fun observeBranchAdminNotifications(branchId: String): Flow<List<AdminDeliveryNotification>> {
+        val path = "admin_notifications"
+        return db.collection(path)
+            .whereEqualTo("branchId", branchId)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(
+                    AdminDeliveryNotification::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ).sortedByDescending { it.deliveredAt ?: it.createdAt ?: Timestamp(0, 0) }
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path)
+                }
+                throw error
+            }
+    }
+
+    suspend fun markAdminNotificationRead(notificationId: String): Result<Unit> {
+        val docPath = "admin_notifications/$notificationId"
+        return try {
+            requireUserId()
+            require(notificationId.isNotBlank()) { "Notification ID required" }
+            db.collection("admin_notifications").document(notificationId).update(
+                mapOf(
+                    "read" to true,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
@@ -1161,6 +1335,33 @@ class CafeRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun markAllAdminNotificationsRead(notificationIds: List<String>): Result<Unit> {
+        val path = "admin_notifications"
+        return try {
+            requireUserId()
+            val cleanIds = notificationIds.filter { it.isNotBlank() }.distinct()
+            if (cleanIds.isEmpty()) return Result.success(Unit)
+            val batch = db.batch()
+            cleanIds.take(400).forEach { id ->
+                val ref = db.collection(path).document(id)
+                batch.update(
+                    ref,
+                    mapOf(
+                        "read" to true,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }

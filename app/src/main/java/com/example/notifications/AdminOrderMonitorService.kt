@@ -35,6 +35,7 @@ class AdminOrderMonitorService : Service() {
     private var ordersListener: ListenerRegistration? = null
     private var authStateListener: FirebaseAuth.AuthStateListener? = null
     private val seenOrderIds = mutableSetOf<String>()
+    private val seenOrderStatuses = mutableMapOf<String, OrderStatus>()
     private var initialSnapshotProcessed = false
     private var activeScopeKey: String? = null
 
@@ -145,6 +146,7 @@ class AdminOrderMonitorService : Service() {
         ordersListener?.remove()
         ordersListener = null
         seenOrderIds.clear()
+        seenOrderStatuses.clear()
         initialSnapshotProcessed = false
 
         val databaseId = applicationContext.getString(R.string.firestore_database_id)
@@ -165,47 +167,66 @@ class AdminOrderMonitorService : Service() {
             if (!initialSnapshotProcessed) {
                 snapshots.documents.forEach { doc ->
                     seenOrderIds.add(doc.id)
+                    val statusRaw = doc.getString("status").orEmpty()
+                    seenOrderStatuses[doc.id] = OrderStatus.fromString(statusRaw)
                 }
                 initialSnapshotProcessed = true
                 return@addSnapshotListener
             }
 
             for (change in snapshots.documentChanges) {
+                val doc = change.document
+                val order = doc.toObject(
+                    CafeOrder::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
+                val orderId = order.id.ifBlank { doc.id }
+                val newStatus = OrderStatus.fromString(order.status)
+
                 if (change.type == DocumentChange.Type.ADDED) {
-                    val doc = change.document
-                    if (seenOrderIds.add(doc.id)) {
-                        val order = doc.toObject(
-                            CafeOrder::class.java,
-                            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    seenOrderStatuses[doc.id] = newStatus
+                    if (seenOrderIds.add(doc.id) && newStatus == OrderStatus.Confirmed) {
+                        OrderNotificationHelper.notifyNewBranchOrder(
+                            context = applicationContext,
+                            orderId = orderId,
+                            branchId = order.branchId,
+                            branchName = order.branchName,
+                            customerName = order.customerName,
+                            orderType = order.orderType,
+                            totalPkr = order.totalPkr,
+                            itemsSummary = order.itemsSummary,
+                            customerPhone = order.customerPhone,
+                            deliveryAddress = order.deliveryAddress,
+                            deliveryLatitude = order.deliveryLatitude,
+                            deliveryLongitude = order.deliveryLongitude
                         )
-                        if (OrderStatus.fromString(order.status) == OrderStatus.Confirmed) {
-                            OrderNotificationHelper.notifyNewBranchOrder(
-                                context = applicationContext,
-                                orderId = order.id.ifBlank { doc.id },
+                        FcmOrderEventBus.emit(
+                            FcmOrderPushEvent(
+                                orderId = orderId,
+                                status = OrderStatus.Confirmed,
+                                title = "New ${order.orderType} Order #${orderId.takeLast(6).uppercase()}",
+                                body = "${order.customerName} • Rs. ${order.totalPkr} • ${order.itemsSummary}",
+                                eventType = OrderNotificationHelper.EVENT_NEW_ORDER,
                                 branchId = order.branchId,
                                 branchName = order.branchName,
-                                customerName = order.customerName,
-                                orderType = order.orderType,
-                                totalPkr = order.totalPkr,
-                                itemsSummary = order.itemsSummary,
-                                customerPhone = order.customerPhone,
-                                deliveryAddress = order.deliveryAddress,
-                                deliveryLatitude = order.deliveryLatitude,
-                                deliveryLongitude = order.deliveryLongitude
+                                itemsSummary = order.itemsSummary
                             )
-                            FcmOrderEventBus.emit(
-                                FcmOrderPushEvent(
-                                    orderId = order.id.ifBlank { doc.id },
-                                    status = OrderStatus.Confirmed,
-                                    title = "New ${order.orderType} Order #${(order.id.ifBlank { doc.id }).takeLast(6).uppercase()}",
-                                    body = "${order.customerName} • Rs. ${order.totalPkr} • ${order.itemsSummary}",
-                                    eventType = OrderNotificationHelper.EVENT_NEW_ORDER,
-                                    branchId = order.branchId,
-                                    branchName = order.branchName,
-                                    itemsSummary = order.itemsSummary
-                                )
-                            )
-                        }
+                        )
+                    }
+                } else if (change.type == DocumentChange.Type.MODIFIED) {
+                    val prevStatus = seenOrderStatuses[doc.id]
+                    seenOrderStatuses[doc.id] = newStatus
+                    if (prevStatus != OrderStatus.Delivered && newStatus == OrderStatus.Delivered) {
+                        OrderNotificationHelper.notifyAdminOrderDelivered(
+                            context = applicationContext,
+                            orderId = orderId,
+                            branchId = order.branchId,
+                            branchName = order.branchName,
+                            customerName = order.customerName,
+                            customerPhone = order.customerPhone,
+                            deliveryAddress = order.deliveryAddress,
+                            totalPkr = order.totalPkr
+                        )
                     }
                 }
             }

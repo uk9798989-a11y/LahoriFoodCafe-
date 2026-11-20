@@ -767,11 +767,15 @@ fun OrderDetailsBottomSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Delivery Fee", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Delivery Charges", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    text = if (order.deliveryFeePkr == 0L) "FREE" else formatPkr(order.deliveryFeePkr),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    text = if (order.deliveryFeePkr == 0L) "Rs. 0 (FREE)" else formatPkr(order.deliveryFeePkr),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                    color = if (order.deliveryFeePkr == 0L) {
+                        if (isDark) Color(0xFF4ADE80) else LahoriSuccess
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
                 )
             }
             if (order.discountPkr > 0L) {

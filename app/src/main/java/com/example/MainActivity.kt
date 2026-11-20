@@ -58,8 +58,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.AddressAndAlertPreferences
 import com.example.data.CafeRepository
 import com.example.data.LocationHelper
+import com.example.data.PersistedManualAddress
 import com.example.data.ThemePreferences
 import com.example.data.attemptAutoSignIn
 import com.example.data.authStateFlow
@@ -202,6 +204,20 @@ private fun LahoriAppRoot(
 
     val auth = Firebase.auth
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+    val persistedManualAddress by AddressAndAlertPreferences.observeSavedManualAddress(context)
+        .collectAsStateWithLifecycle(initialValue = PersistedManualAddress())
+
+    LaunchedEffect(persistedManualAddress) {
+        if (persistedManualAddress.hasSavedAddress) {
+            sessionCart.restorePersistedAddressIfEmpty(
+                fullAddress = persistedManualAddress.fullAddress,
+                landmark = persistedManualAddress.landmark,
+                label = persistedManualAddress.label,
+                branchId = persistedManualAddress.branchId,
+                savedAddressId = persistedManualAddress.addressId
+            )
+        }
+    }
 
     var guestBrowseMode by remember { mutableStateOf(false) }
     var authLoading by remember { mutableStateOf(false) }
@@ -528,12 +544,42 @@ private fun GuestCafeShell(
         SavedAddressesBottomSheet(
             savedAddresses = sessionState.guestAddresses,
             selectedAddressStreet = sessionState.selectedAddressStreet,
-            onSelectAddress = { addr -> sessionCart.selectDeliveryAddress(addr) },
-            onAddNewAddress = { label, street, area ->
-                val saved = sessionCart.addGuestAddress(label, street, area)
+            selectedLandmark = sessionState.selectedLandmark,
+            selectedAddressLabel = sessionState.selectedAddressLabel,
+            onSelectAddress = { addr ->
+                sessionCart.selectDeliveryAddress(addr)
                 scope.launch {
-                    snackbarHostState.showSnackbar("Routed to ${saved.branchName} (${saved.branchId})")
+                    AddressAndAlertPreferences.saveManualAddress(
+                        context = context,
+                        addressId = addr.id,
+                        label = addr.label,
+                        fullAddress = addr.streetAddress,
+                        landmark = addr.landmark,
+                        branchId = addr.branchId
+                    )
                 }
+            },
+            onSaveManualAddress = { editingId, label, fullAddr, landmark ->
+                val saved = if (editingId != null) {
+                    sessionCart.updateGuestAddress(editingId, label, fullAddr, landmark)
+                } else {
+                    sessionCart.addGuestAddress(label, fullAddr, "", landmark)
+                }
+                scope.launch {
+                    AddressAndAlertPreferences.saveManualAddress(
+                        context = context,
+                        addressId = saved.id,
+                        label = saved.label,
+                        fullAddress = saved.streetAddress,
+                        landmark = saved.landmark,
+                        branchId = saved.branchId
+                    )
+                    snackbarHostState.showSnackbar("Address saved! Serving branch: ${saved.branchName} • FREE Delivery")
+                }
+            },
+            onDeleteAddress = { addrId ->
+                sessionCart.deleteGuestAddress(addrId)
+                scope.launch { snackbarHostState.showSnackbar("Saved address removed") }
             },
             onStartOrder = { showSavedAddressesSheet = false },
             onDismiss = { showSavedAddressesSheet = false },
@@ -606,6 +652,26 @@ private fun GuestCafeShell(
             onClearPromoCode = { sessionCart.clearPromo() },
             isLocatingGps = isLocatingGps,
             onRequestLiveLocation = { triggerGpsDetection(true) },
+            onSaveAddressFromCheckout = { fullAddr, landmark ->
+                val branch = BranchDirectory.routeAddressToBranch("$fullAddr $landmark")
+                sessionCart.applyManualAddress(
+                    fullAddress = fullAddr,
+                    landmark = landmark,
+                    label = sessionState.selectedAddressLabel.ifBlank { "Home" },
+                    branchId = branch.id,
+                    savedAddressId = sessionState.savedManualAddressId
+                )
+                scope.launch {
+                    AddressAndAlertPreferences.saveManualAddress(
+                        context = context,
+                        addressId = sessionState.savedManualAddressId,
+                        label = sessionState.selectedAddressLabel.ifBlank { "Home" },
+                        fullAddress = fullAddr,
+                        landmark = landmark,
+                        branchId = branch.id
+                    )
+                }
+            },
             onPlaceOrder = { name, phone, deliveryAddr, deliveryLat, deliveryLng, _ ->
                 sessionCart.setPendingGuestOrder(
                     PendingGuestOrder(
@@ -697,8 +763,43 @@ private fun AuthenticatedCafeShell(
     val trackedOrderState by viewModel.trackedOrderState.collectAsStateWithLifecycle()
     val fcmTokenRegistered by viewModel.fcmTokenRegistered.collectAsStateWithLifecycle()
     val newBranchOrderAlert by viewModel.newBranchOrderAlert.collectAsStateWithLifecycle()
+    val adminNotifications by viewModel.adminNotifications.collectAsStateWithLifecycle()
+    val unreadAdminNotificationCount by viewModel.unreadAdminNotificationCount.collectAsStateWithLifecycle()
+    val deliveredPopupQueue by viewModel.deliveredPopupQueue.collectAsStateWithLifecycle()
+    val adminSoundEnabled by AddressAndAlertPreferences.observeAdminSoundEnabled(context)
+        .collectAsStateWithLifecycle(initialValue = true)
     val actionError by viewModel.actionError.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
+
+    // Auto-restore customer's latest Firestore saved address if local DataStore is empty
+    LaunchedEffect(savedAddresses) {
+        val firstSaved = savedAddresses.firstOrNull()
+        if (firstSaved != null && sessionState.selectedAddressStreet.isBlank()) {
+            sessionCart.restorePersistedAddressIfEmpty(
+                fullAddress = firstSaved.streetAddress,
+                landmark = firstSaved.landmark,
+                label = firstSaved.label,
+                branchId = firstSaved.branchId,
+                savedAddressId = firstSaved.id
+            )
+            AddressAndAlertPreferences.saveManualAddress(
+                context = context,
+                addressId = firstSaved.id,
+                label = firstSaved.label,
+                fullAddress = firstSaved.streetAddress,
+                landmark = firstSaved.landmark,
+                branchId = firstSaved.branchId
+            )
+        }
+    }
+
+    // Play instant delivery sound chime whenever a new delivered notification enters the admin popup queue
+    val activeDeliveredPopupId = deliveredPopupQueue.firstOrNull()?.id
+    LaunchedEffect(activeDeliveredPopupId) {
+        if (!activeDeliveredPopupId.isNullOrBlank() && adminSoundEnabled) {
+            OrderNotificationHelper.playAdminDeliverySound(context)
+        }
+    }
 
     var isLocatingGps by remember { mutableStateOf(false) }
     var pendingGpsKeepOrderType by remember { mutableStateOf(true) }
@@ -842,6 +943,11 @@ private fun AuthenticatedCafeShell(
                     showSuperAdminDashboard = true
                 }
                 snackbarHostState.showSnackbar("New order #${targetOrderId.takeLast(6).uppercase()} is in your queue!")
+            } else if (pendingNotificationEventType == OrderNotificationHelper.EVENT_ORDER_DELIVERED) {
+                if (isSuperAdminAccount) {
+                    showSuperAdminDashboard = true
+                }
+                snackbarHostState.showSnackbar("Order #${targetOrderId.takeLast(6).uppercase()} was delivered!")
             } else {
                 viewModel.startTrackingOrder(targetOrderId)
             }
@@ -1030,7 +1136,17 @@ private fun AuthenticatedCafeShell(
             onDismissNewOrderAlert = { viewModel.dismissNewBranchOrderAlert() },
             notificationsEnabled = notificationsGranted,
             liveAlertsActive = liveAdminAlertsRunning,
-            onRequestEnableAlerts = requestOrStartAdminAlerts
+            onRequestEnableAlerts = requestOrStartAdminAlerts,
+            adminNotifications = adminNotifications,
+            unreadNotificationCount = unreadAdminNotificationCount,
+            deliveredPopupQueue = deliveredPopupQueue,
+            soundEnabled = adminSoundEnabled,
+            onToggleSound = { enabled ->
+                scope.launch { AddressAndAlertPreferences.setAdminSoundEnabled(context, enabled) }
+            },
+            onMarkNotificationRead = { notifId -> viewModel.markAdminNotificationRead(notifId) },
+            onMarkAllNotificationsRead = { viewModel.markAllAdminNotificationsRead() },
+            onDismissDeliveredPopup = { viewModel.dismissCurrentDeliveredPopup() }
         )
         return
     }
@@ -1136,7 +1252,17 @@ private fun AuthenticatedCafeShell(
                 },
                 notificationsEnabled = notificationsGranted,
                 liveAlertsActive = liveAdminAlertsRunning,
-                onRequestEnableAlerts = requestOrStartAdminAlerts
+                onRequestEnableAlerts = requestOrStartAdminAlerts,
+                adminNotifications = adminNotifications,
+                unreadNotificationCount = unreadAdminNotificationCount,
+                deliveredPopupQueue = deliveredPopupQueue,
+                soundEnabled = adminSoundEnabled,
+                onToggleSound = { enabled ->
+                    scope.launch { AddressAndAlertPreferences.setAdminSoundEnabled(context, enabled) }
+                },
+                onMarkNotificationRead = { notifId -> viewModel.markAdminNotificationRead(notifId) },
+                onMarkAllNotificationsRead = { viewModel.markAllAdminNotificationsRead() },
+                onDismissDeliveredPopup = { viewModel.dismissCurrentDeliveredPopup() }
             )
             SnackbarHost(
                 hostState = snackbarHostState,
@@ -1201,7 +1327,17 @@ private fun AuthenticatedCafeShell(
             onDeleteBranchBanner = { viewModel.deleteBranchBanner(it) },
             notificationsEnabled = notificationsGranted,
             liveAlertsActive = liveAdminAlertsRunning,
-            onRequestEnableAlerts = requestOrStartAdminAlerts
+            onRequestEnableAlerts = requestOrStartAdminAlerts,
+            adminNotifications = adminNotifications,
+            unreadNotificationCount = unreadAdminNotificationCount,
+            deliveredPopupQueue = deliveredPopupQueue,
+            soundEnabled = adminSoundEnabled,
+            onToggleSound = { enabled ->
+                scope.launch { AddressAndAlertPreferences.setAdminSoundEnabled(context, enabled) }
+            },
+            onMarkNotificationRead = { notifId -> viewModel.markAdminNotificationRead(notifId) },
+            onMarkAllNotificationsRead = { viewModel.markAllAdminNotificationsRead() },
+            onDismissDeliveredPopup = { viewModel.dismissCurrentDeliveredPopup() }
         )
         return
     }
@@ -1478,13 +1614,55 @@ private fun AuthenticatedCafeShell(
         SavedAddressesBottomSheet(
             savedAddresses = savedAddresses,
             selectedAddressStreet = sessionState.selectedAddressStreet,
-            onSelectAddress = { addr -> sessionCart.selectDeliveryAddress(addr) },
-            onAddNewAddress = { label, street, area ->
-                viewModel.saveAddressAndRoute(label, street, area) { saved ->
-                    scope.launch {
-                        snackbarHostState.showSnackbar("Routed to ${saved.branchName} (${saved.branchId})")
+            selectedLandmark = sessionState.selectedLandmark,
+            selectedAddressLabel = sessionState.selectedAddressLabel,
+            onSelectAddress = { addr ->
+                sessionCart.selectDeliveryAddress(addr)
+                scope.launch {
+                    AddressAndAlertPreferences.saveManualAddress(
+                        context = context,
+                        addressId = addr.id,
+                        label = addr.label,
+                        fullAddress = addr.streetAddress,
+                        landmark = addr.landmark,
+                        branchId = addr.branchId
+                    )
+                }
+            },
+            onSaveManualAddress = { editingId, label, fullAddr, landmark ->
+                if (editingId != null) {
+                    viewModel.updateSavedAddressAndRoute(editingId, label, fullAddr, "", landmark) { updated ->
+                        scope.launch {
+                            AddressAndAlertPreferences.saveManualAddress(
+                                context = context,
+                                addressId = updated.id,
+                                label = updated.label,
+                                fullAddress = updated.streetAddress,
+                                landmark = updated.landmark,
+                                branchId = updated.branchId
+                            )
+                            snackbarHostState.showSnackbar("Address updated! Serving branch: ${updated.branchName}")
+                        }
+                    }
+                } else {
+                    viewModel.saveAddressAndRoute(label, fullAddr, "", landmark) { saved ->
+                        scope.launch {
+                            AddressAndAlertPreferences.saveManualAddress(
+                                context = context,
+                                addressId = saved.id,
+                                label = saved.label,
+                                fullAddress = saved.streetAddress,
+                                landmark = saved.landmark,
+                                branchId = saved.branchId
+                            )
+                            snackbarHostState.showSnackbar("Address saved! Serving branch: ${saved.branchName} • FREE Delivery")
+                        }
                     }
                 }
+            },
+            onDeleteAddress = { addrId ->
+                viewModel.deleteSavedAddress(addrId)
+                scope.launch { snackbarHostState.showSnackbar("Saved address deleted") }
             },
             onStartOrder = { showSavedAddressesSheet = false },
             onDismiss = { showSavedAddressesSheet = false },
@@ -1529,6 +1707,56 @@ private fun AuthenticatedCafeShell(
             onClearPromoCode = { sessionCart.clearPromo() },
             isLocatingGps = isLocatingGps,
             onRequestLiveLocation = { triggerGpsDetection(true) },
+            onSaveAddressFromCheckout = { fullAddr, landmark ->
+                val branch = BranchDirectory.routeAddressToBranch("$fullAddr $landmark", branchesList)
+                val existingId = sessionState.savedManualAddressId.ifBlank {
+                    savedAddresses.firstOrNull { it.streetAddress.equals(fullAddr, ignoreCase = true) }?.id.orEmpty()
+                }
+                sessionCart.applyManualAddress(
+                    fullAddress = fullAddr,
+                    landmark = landmark,
+                    label = sessionState.selectedAddressLabel.ifBlank { "Home" },
+                    branchId = branch.id,
+                    savedAddressId = existingId
+                )
+                scope.launch {
+                    AddressAndAlertPreferences.saveManualAddress(
+                        context = context,
+                        addressId = existingId,
+                        label = sessionState.selectedAddressLabel.ifBlank { "Home" },
+                        fullAddress = fullAddr,
+                        landmark = landmark,
+                        branchId = branch.id
+                    )
+                }
+                if (existingId.isNotBlank() && savedAddresses.any { it.id == existingId }) {
+                    viewModel.updateSavedAddressAndRoute(
+                        addressId = existingId,
+                        label = sessionState.selectedAddressLabel.ifBlank { "Home" },
+                        streetAddress = fullAddr,
+                        area = "",
+                        landmark = landmark
+                    ) {}
+                } else {
+                    viewModel.saveAddressAndRoute(
+                        label = sessionState.selectedAddressLabel.ifBlank { "Home" },
+                        streetAddress = fullAddr,
+                        area = "",
+                        landmark = landmark
+                    ) { saved ->
+                        scope.launch {
+                            AddressAndAlertPreferences.saveManualAddress(
+                                context = context,
+                                addressId = saved.id,
+                                label = saved.label,
+                                fullAddress = saved.streetAddress,
+                                landmark = saved.landmark,
+                                branchId = saved.branchId
+                            )
+                        }
+                    }
+                }
+            },
             onPlaceOrder = { name, phone, deliveryAddr, deliveryLat, deliveryLng, guestCheckout ->
                 isSubmittingOrder = true
                 viewModel.submitOrder(

@@ -29,6 +29,7 @@ object OrderNotificationHelper {
     const val EXTRA_BRANCH_ID = "branch_id"
     const val EVENT_NEW_ORDER = "NEW_ORDER"
     const val EVENT_ORDER_STATUS = "ORDER_STATUS"
+    const val EVENT_ORDER_DELIVERED = "ORDER_DELIVERED"
 
     private const val CHANNEL_NAME = "Order Status Updates"
     private const val CHANNEL_DESC = "Real-time Lahori Food Cafe order & pickup push alerts"
@@ -270,6 +271,57 @@ object OrderNotificationHelper {
             expandedText = expandedBody,
             isAdminUrgent = true,
             mapActionPendingIntent = mapActionPendingIntent
+        )
+    }
+
+    fun playAdminDeliverySound(context: Context) {
+        try {
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION) ?: return
+            val ringtone = RingtoneManager.getRingtone(context.applicationContext, uri)
+            ringtone?.play()
+        } catch (_: Exception) {
+            // Safe fallback on devices without default notification sound or audio focus
+        }
+    }
+
+    fun notifyAdminOrderDelivered(
+        context: Context,
+        orderId: String,
+        branchId: String,
+        branchName: String,
+        customerName: String,
+        customerPhone: String,
+        deliveryAddress: String,
+        totalPkr: Long,
+        skipDedupe: Boolean = false
+    ) {
+        val dedupeKey = "delivered_${orderId.trim()}"
+        if (!skipDedupe && orderId.isNotBlank() && !markOrderNotifiedIfNew(context, dedupeKey)) {
+            return
+        }
+        val shortId = orderId.takeLast(6).uppercase()
+        val resolvedTitle = "🎉 Order #$shortId Successfully Delivered!"
+        val shortBody = "${customerName.ifBlank { "Customer" }} • Rs. $totalPkr • Free Delivery (Rs. 0)"
+        val expandedBody = buildString {
+            append("The order has been successfully delivered to the customer.")
+            append("\nOrder: #$shortId ($branchName)")
+            append("\nCustomer: ${customerName.ifBlank { "Customer" }}")
+            if (customerPhone.isNotBlank()) append(" • $customerPhone")
+            append("\nTotal: Rs. $totalPkr (Delivery: FREE)")
+            if (deliveryAddress.isNotBlank()) append("\nAddress: $deliveryAddress")
+        }
+
+        postNotification(
+            context = context,
+            channelId = CHANNEL_BRANCH_ORDERS_ID,
+            notificationId = if (orderId.isNotBlank()) "delivered_order_$orderId".hashCode() else 3001,
+            orderId = orderId,
+            eventType = EVENT_ORDER_DELIVERED,
+            branchId = branchId,
+            title = resolvedTitle,
+            shortText = shortBody,
+            expandedText = expandedBody,
+            isAdminUrgent = true
         )
     }
 

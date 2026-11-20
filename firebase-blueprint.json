@@ -100,8 +100,9 @@
       "type": "object",
       "properties": {
         "label": { "type": "string", "description": "Short label like Home or Office." },
-        "streetAddress": { "type": "string", "description": "Full street address." },
-        "area": { "type": "string", "description": "Lahore neighborhood/zone used for branch routing." },
+        "streetAddress": { "type": "string", "description": "Complete delivery address (House No, Street, Area, City)." },
+        "area": { "type": "string", "description": "Neighborhood/zone used for branch routing." },
+        "landmark": { "type": "string", "description": "Optional nearby landmark to help the rider." },
         "branchId": { "type": "string", "description": "Auto-assigned closest branch ID." },
         "branchName": { "type": "string", "description": "Auto-assigned closest branch name." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
@@ -203,6 +204,30 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
       },
       "required": ["userId", "customerName", "customerEmail", "branchId", "branchName", "foodRating", "serviceRating", "comment", "createdAt", "updatedAt"]
+    },
+    "AdminDeliveryNotification": {
+      "title": "AdminDeliveryNotification",
+      "description": "Persistent real-time admin notification created immediately when an order status changes to Delivered.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "description": "Firestore ID of the delivered order." },
+        "orderNumber": { "type": "string", "description": "Short order number (e.g. #A1B2C3)." },
+        "branchId": { "type": "string", "description": "Branch ID that fulfilled the order." },
+        "branchName": { "type": "string", "description": "Branch display name." },
+        "customerName": { "type": "string", "description": "Customer recipient name." },
+        "customerPhone": { "type": "string", "description": "Customer contact phone number." },
+        "deliveryAddress": { "type": "string", "description": "Complete customer delivery address." },
+        "totalPkr": { "type": "integer", "description": "Final order total in PKR (with FREE delivery Rs. 0)." },
+        "orderType": { "type": "string", "enum": ["DELIVERY", "PICKUP"], "description": "Fulfillment type." },
+        "itemsSummary": { "type": "string", "description": "Ordered items summary." },
+        "title": { "type": "string", "description": "Notification title." },
+        "message": { "type": "string", "description": "Notification body message." },
+        "read": { "type": "boolean", "description": "Whether the admin has opened/read this notification." },
+        "deliveredAt": { "type": "string", "format": "date-time", "description": "Server timestamp when order was marked Delivered." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last update." }
+      },
+      "required": ["orderId", "orderNumber", "branchId", "branchName", "customerName", "customerPhone", "deliveryAddress", "totalPkr", "orderType", "itemsSummary", "title", "message", "read", "deliveredAt", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -228,7 +253,7 @@
     },
     "/users/{userId}/addresses/{addressId}": {
       "schema": { "$ref": "#/entities/SavedAddress" },
-      "description": "Customer saved delivery addresses with auto-routed branchId."
+      "description": "Customer saved delivery addresses with optional landmark and auto-routed branchId."
     },
     "/users/{userId}/fcm_tokens/{tokenId}": {
       "schema": { "$ref": "#/entities/FcmTokenRecord" },
@@ -240,7 +265,7 @@
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/CafeOrder" },
-      "description": "Customer and guest orders routed to dynamic branches."
+      "description": "Customer and guest orders routed to dynamic branches with permanent Rs. 0 FREE delivery."
     },
     "/reviews/{reviewId}": {
       "schema": { "$ref": "#/entities/OrderReview" },
@@ -249,6 +274,10 @@
     "/feedback/{feedbackId}": {
       "schema": { "$ref": "#/entities/CafeFeedback" },
       "description": "General customer food and service ratings submitted from Account Settings."
+    },
+    "/admin_notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/AdminDeliveryNotification" },
+      "description": "Persistent real-time admin order-delivered notifications scoped by branchId."
     }
   }
 }

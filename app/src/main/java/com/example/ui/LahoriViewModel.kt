@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.CafeRepository
 import com.example.data.MenuImageStorageHelper
+import com.example.model.AdminDeliveryNotification
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchBanner
 import com.example.model.BranchDirectory
@@ -61,10 +62,12 @@ data class PendingGuestOrder(
 
 data class SharedSessionState(
     val cartItems: List<CartItem> = emptyList(),
-    val orderType: OrderType = OrderType.PICKUP,
+    val orderType: OrderType = OrderType.DELIVERY,
     val selectedBranchId: String = BranchDirectory.branch1.id,
     val selectedAddressLabel: String = "",
     val selectedAddressStreet: String = "",
+    val selectedLandmark: String = "",
+    val savedManualAddressId: String = "",
     val deviceLatitude: Double? = null,
     val deviceLongitude: Double? = null,
     val detectedGpsAddress: String = "",
@@ -80,6 +83,17 @@ data class SharedSessionState(
     val totalItemCount: Int get() = cartItems.sumOf { it.quantity }
     val subtotalPkr: Long get() = cartItems.sumOf { it.lineTotalPkr }
     val hasGpsFix: Boolean get() = deviceLatitude != null && deviceLongitude != null
+
+    fun combinedManualAddress(): String {
+        val base = selectedAddressStreet.trim()
+        val lm = selectedLandmark.trim()
+        if (base.isBlank()) return ""
+        return if (lm.isNotBlank() && !base.contains(lm, ignoreCase = true)) {
+            "$base (Landmark: $lm)"
+        } else {
+            base
+        }
+    }
 }
 
 class SessionCartController {
@@ -128,14 +142,59 @@ class SessionCartController {
     }
 
     fun selectDeliveryAddress(address: SavedAddress) {
+        val displayStreet = if (address.area.isNotBlank() && !address.streetAddress.contains(address.area, ignoreCase = true)) {
+            "${address.streetAddress}, ${address.area}"
+        } else {
+            address.streetAddress
+        }
         _state.value = _state.value
             .sanitizePromoForBranch(address.branchId)
             .copy(
                 orderType = OrderType.DELIVERY,
                 selectedBranchId = address.branchId,
-                selectedAddressLabel = address.label,
-                selectedAddressStreet = "${address.streetAddress}, ${address.area}"
+                selectedAddressLabel = address.label.ifBlank { "Home" },
+                selectedAddressStreet = displayStreet.trim(),
+                selectedLandmark = address.landmark.trim(),
+                savedManualAddressId = address.id
             )
+    }
+
+    fun applyManualAddress(
+        fullAddress: String,
+        landmark: String = "",
+        label: String = "Home",
+        branchId: String,
+        savedAddressId: String = "",
+        keepOrderType: Boolean = false
+    ) {
+        val current = _state.value.sanitizePromoForBranch(branchId)
+        _state.value = current.copy(
+            orderType = if (keepOrderType) current.orderType else OrderType.DELIVERY,
+            selectedBranchId = branchId.ifBlank { current.selectedBranchId },
+            selectedAddressLabel = label.trim().ifBlank { "Home" },
+            selectedAddressStreet = fullAddress.trim(),
+            selectedLandmark = landmark.trim(),
+            savedManualAddressId = savedAddressId
+        )
+    }
+
+    fun restorePersistedAddressIfEmpty(
+        fullAddress: String,
+        landmark: String,
+        label: String,
+        branchId: String,
+        savedAddressId: String = ""
+    ) {
+        val current = _state.value
+        if (current.selectedAddressStreet.isBlank() && fullAddress.isNotBlank()) {
+            _state.value = current.copy(
+                selectedBranchId = branchId.ifBlank { current.selectedBranchId },
+                selectedAddressLabel = label.ifBlank { "Home" },
+                selectedAddressStreet = fullAddress.trim(),
+                selectedLandmark = landmark.trim(),
+                savedManualAddressId = savedAddressId
+            )
+        }
     }
 
     fun selectPickupBranch(branchId: String) {
@@ -159,8 +218,8 @@ class SessionCartController {
         _state.value = current.copy(
             orderType = if (keepOrderType) current.orderType else OrderType.DELIVERY,
             selectedBranchId = nearestBranchId,
-            selectedAddressLabel = areaLabel.ifBlank { "GPS Location" },
-            selectedAddressStreet = formattedAddress,
+            selectedAddressLabel = current.selectedAddressLabel.ifBlank { areaLabel.ifBlank { "GPS Location" } },
+            selectedAddressStreet = current.selectedAddressStreet.ifBlank { formattedAddress },
             deviceLatitude = latitude,
             deviceLongitude = longitude,
             detectedGpsAddress = formattedAddress,
@@ -177,8 +236,8 @@ class SessionCartController {
             .copy(
                 orderType = OrderType.DELIVERY,
                 selectedBranchId = branchId,
-                selectedAddressLabel = area,
-                selectedAddressStreet = area
+                selectedAddressLabel = _state.value.selectedAddressLabel.ifBlank { area },
+                selectedAddressStreet = _state.value.selectedAddressStreet.ifBlank { area }
             )
     }
 
@@ -194,15 +253,20 @@ class SessionCartController {
     fun addGuestAddress(
         label: String,
         streetAddress: String,
-        area: String,
+        area: String = "",
+        landmark: String = "",
         branches: List<CafeBranch> = BranchDirectory.defaultBranches
     ): SavedAddress {
-        val branch = BranchDirectory.routeAddressToBranch("$area $streetAddress", branches)
+        val cleanStreet = streetAddress.trim()
+        val cleanLandmark = landmark.trim()
+        val branch = BranchDirectory.routeAddressToBranch("$area $cleanStreet $cleanLandmark", branches)
+        val cleanArea = area.trim().ifBlank { branch.displayShortLabel() }
         val addr = SavedAddress(
             id = "guest_addr_${UUID.randomUUID().toString().take(6)}",
-            label = label.ifBlank { "Home" },
-            streetAddress = streetAddress,
-            area = area,
+            label = label.trim().ifBlank { "Home" },
+            streetAddress = cleanStreet,
+            area = cleanArea,
+            landmark = cleanLandmark,
             branchId = branch.id,
             branchName = branch.name
         )
@@ -213,9 +277,56 @@ class SessionCartController {
                 orderType = OrderType.DELIVERY,
                 selectedBranchId = addr.branchId,
                 selectedAddressLabel = addr.label,
-                selectedAddressStreet = "${addr.streetAddress}, ${addr.area}"
+                selectedAddressStreet = cleanStreet,
+                selectedLandmark = cleanLandmark,
+                savedManualAddressId = addr.id
             )
         return addr
+    }
+
+    fun updateGuestAddress(
+        addressId: String,
+        label: String,
+        streetAddress: String,
+        area: String = "",
+        landmark: String = "",
+        branches: List<CafeBranch> = BranchDirectory.defaultBranches
+    ): SavedAddress {
+        val cleanStreet = streetAddress.trim()
+        val cleanLandmark = landmark.trim()
+        val branch = BranchDirectory.routeAddressToBranch("$area $cleanStreet $cleanLandmark", branches)
+        val cleanArea = area.trim().ifBlank { branch.displayShortLabel() }
+        val updated = SavedAddress(
+            id = addressId,
+            label = label.trim().ifBlank { "Home" },
+            streetAddress = cleanStreet,
+            area = cleanArea,
+            landmark = cleanLandmark,
+            branchId = branch.id,
+            branchName = branch.name
+        )
+        val updatedList = _state.value.guestAddresses.map { if (it.id == addressId) updated else it }
+            .let { list -> if (list.any { it.id == addressId }) list else listOf(updated) + list }
+        _state.value = _state.value
+            .sanitizePromoForBranch(updated.branchId)
+            .copy(
+                guestAddresses = updatedList,
+                orderType = OrderType.DELIVERY,
+                selectedBranchId = updated.branchId,
+                selectedAddressLabel = updated.label,
+                selectedAddressStreet = cleanStreet,
+                selectedLandmark = cleanLandmark,
+                savedManualAddressId = updated.id
+            )
+        return updated
+    }
+
+    fun deleteGuestAddress(addressId: String) {
+        val remaining = _state.value.guestAddresses.filterNot { it.id == addressId }
+        _state.value = _state.value.copy(
+            guestAddresses = remaining,
+            savedManualAddressId = if (_state.value.savedManualAddressId == addressId) "" else _state.value.savedManualAddressId
+        )
     }
 
     fun toggleGuestFavorite(itemId: String) {
@@ -299,6 +410,9 @@ class LahoriViewModel(
     private val _newBranchOrderAlert = MutableStateFlow<CafeOrder?>(null)
     val newBranchOrderAlert: StateFlow<CafeOrder?> = _newBranchOrderAlert.asStateFlow()
 
+    private val _deliveredPopupQueue = MutableStateFlow<List<AdminDeliveryNotification>>(emptyList())
+    val deliveredPopupQueue: StateFlow<List<AdminDeliveryNotification>> = _deliveredPopupQueue.asStateFlow()
+
     @Volatile
     private var currentFcmToken: String? = null
 
@@ -315,6 +429,10 @@ class LahoriViewModel(
 
     private val seenSuperAdminOrderIds = mutableSetOf<String>()
     private var initialSuperAdminOrderLoadComplete = false
+
+    private val seenDeliveredNotificationIds = mutableSetOf<String>()
+    private var initialAdminNotifLoadComplete = false
+    private var lastAdminNotifScopeKey: String? = null
 
     val branchesList: StateFlow<List<CafeBranch>> = repository.observeBranches()
         .map { branches -> branches.ifEmpty { BranchDirectory.defaultBranches } }
@@ -334,23 +452,7 @@ class LahoriViewModel(
                     val customItems = items.filter { it.id !in SeedMenuData.legacyStarterIds }
                     (SeedMenuData.initialItems + customItems).sortedBy { it.sortOrder }
                 }
-                else -> {
-                    val seedByDocId = SeedMenuData.initialItems.associateBy { it.id.removePrefix("seed_") }
-                    val existingDocIds = items.map { it.id.removePrefix("seed_") }.toSet()
-                    val upgradedFirestoreItems = items.map { docItem ->
-                        val canonicalSeed = seedByDocId[docItem.id.removePrefix("seed_")]
-                        if (canonicalSeed != null && !docItem.imageKey.startsWith("menu_")) {
-                            docItem.copy(imageKey = canonicalSeed.imageKey)
-                        } else {
-                            docItem
-                        }
-                    }
-                    val newlyAddedCatalogItems = SeedMenuData.initialItems.filter { seedItem ->
-                        val docId = seedItem.id.removePrefix("seed_")
-                        docId !in existingDocIds
-                    }
-                    (upgradedFirestoreItems + newlyAddedCatalogItems).sortedBy { it.sortOrder }
-                }
+                else -> items
             }
             UiState.Success(resolved)
         }
@@ -620,6 +722,47 @@ class LahoriViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
+    // Persistent Real-Time Admin Delivery Notifications (SuperAdmin: all branches; BranchAdmin: assigned branch)
+    @Suppress("OPT_IN_USAGE")
+    val adminNotifications: StateFlow<List<AdminDeliveryNotification>> =
+        combine(effectiveRole, branchAdminAssignment) { role, assignment ->
+            role to assignment
+        }.flatMapLatest { (role, assignment) ->
+            val scopeKey = when {
+                role == UserRole.SuperAdmin -> "super_all"
+                assignment != null -> "branch_${assignment.branchId}"
+                else -> "none"
+            }
+            if (lastAdminNotifScopeKey != scopeKey) {
+                seenDeliveredNotificationIds.clear()
+                initialAdminNotifLoadComplete = false
+                lastAdminNotifScopeKey = scopeKey
+            }
+            when {
+                role == UserRole.SuperAdmin -> repository.observeAllAdminNotifications()
+                    .onEach { processAdminDeliveryNotifications(it) }
+                    .catch { error ->
+                        val firestoreError = unwrapFirestoreException(error)
+                        if (firestoreError == null && error is CancellationException) throw error
+                        Log.w(TAG, "SuperAdmin notifications stream error", firestoreError ?: error)
+                        emit(emptyList())
+                    }
+                assignment != null -> repository.observeBranchAdminNotifications(assignment.branchId)
+                    .onEach { processAdminDeliveryNotifications(it) }
+                    .catch { error ->
+                        val firestoreError = unwrapFirestoreException(error)
+                        if (firestoreError == null && error is CancellationException) throw error
+                        Log.w(TAG, "BranchAdmin notifications stream error", firestoreError ?: error)
+                        emit(emptyList())
+                    }
+                else -> flowOf(emptyList())
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val unreadAdminNotificationCount: StateFlow<Int> = adminNotifications
+        .map { list -> list.count { !it.read } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), 0)
+
     init {
         viewModelScope.launch {
             repository.ensureUserProfile()
@@ -771,6 +914,59 @@ class LahoriViewModel(
         _newBranchOrderAlert.value = null
     }
 
+    private fun processAdminDeliveryNotifications(notifications: List<AdminDeliveryNotification>) {
+        if (!initialAdminNotifLoadComplete) {
+            notifications.forEach { seenDeliveredNotificationIds.add(it.id) }
+            initialAdminNotifLoadComplete = true
+            return
+        }
+        val newlyDelivered = notifications.filter { notif ->
+            notif.id.isNotBlank() &&
+                !notif.read &&
+                seenDeliveredNotificationIds.add(notif.id)
+        }
+        notifications.forEach { if (it.id.isNotBlank()) seenDeliveredNotificationIds.add(it.id) }
+        if (newlyDelivered.isNotEmpty()) {
+            val currentQueue = _deliveredPopupQueue.value
+            val existingIds = currentQueue.mapTo(mutableSetOf()) { it.id }
+            val toAppend = newlyDelivered.filterNot { existingIds.contains(it.id) }
+            if (toAppend.isNotEmpty()) {
+                _deliveredPopupQueue.value = currentQueue + toAppend
+            }
+        }
+    }
+
+    fun dismissCurrentDeliveredPopup() {
+        val current = _deliveredPopupQueue.value
+        if (current.isNotEmpty()) {
+            _deliveredPopupQueue.value = current.drop(1)
+        }
+    }
+
+    fun markAdminNotificationRead(notificationId: String) {
+        if (notificationId.isBlank()) return
+        // Remove from popup queue if present
+        _deliveredPopupQueue.value = _deliveredPopupQueue.value.filterNot { it.id == notificationId }
+        viewModelScope.launch {
+            val res = repository.markAdminNotificationRead(notificationId)
+            if (res.isFailure) {
+                Log.w(TAG, "Failed to mark notification read: ${res.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun markAllAdminNotificationsRead() {
+        val unreadIds = adminNotifications.value.filter { !it.read }.map { it.id }
+        if (unreadIds.isEmpty()) return
+        _deliveredPopupQueue.value = emptyList()
+        viewModelScope.launch {
+            val res = repository.markAllAdminNotificationsRead(unreadIds)
+            if (res.isFailure) {
+                _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Could not mark notifications read"
+            }
+        }
+    }
+
     fun openOrderSurvey(order: CafeOrder) {
         if (OrderStatus.fromString(order.status) == OrderStatus.Delivered) {
             _pendingSurveyOrder.value = order
@@ -914,13 +1110,20 @@ class LahoriViewModel(
         }
     }
 
-    fun saveAddressAndRoute(label: String, streetAddress: String, area: String, onSaved: (SavedAddress) -> Unit) {
+    fun saveAddressAndRoute(
+        label: String,
+        streetAddress: String,
+        area: String = "",
+        landmark: String = "",
+        onSaved: (SavedAddress) -> Unit
+    ) {
         viewModelScope.launch {
             val res = repository.addSavedAddress(
                 userId = currentUserId,
                 label = label,
                 streetAddress = streetAddress,
                 area = area,
+                landmark = landmark,
                 knownBranches = branchesList.value
             )
             res.onSuccess { addr ->
@@ -928,6 +1131,42 @@ class LahoriViewModel(
                 onSaved(addr)
             }.onFailure { err ->
                 _actionError.value = err.localizedMessage ?: "Could not save address"
+            }
+        }
+    }
+
+    fun updateSavedAddressAndRoute(
+        addressId: String,
+        label: String,
+        streetAddress: String,
+        area: String = "",
+        landmark: String = "",
+        onSaved: (SavedAddress) -> Unit
+    ) {
+        viewModelScope.launch {
+            val res = repository.updateSavedAddress(
+                userId = currentUserId,
+                addressId = addressId,
+                label = label,
+                streetAddress = streetAddress,
+                area = area,
+                landmark = landmark,
+                knownBranches = branchesList.value
+            )
+            res.onSuccess { addr ->
+                sessionCart.selectDeliveryAddress(addr)
+                onSaved(addr)
+            }.onFailure { err ->
+                _actionError.value = err.localizedMessage ?: "Could not update address"
+            }
+        }
+    }
+
+    fun deleteSavedAddress(addressId: String) {
+        viewModelScope.launch {
+            val res = repository.deleteSavedAddress(currentUserId, addressId)
+            if (res.isFailure) {
+                _actionError.value = res.exceptionOrNull()?.localizedMessage ?: "Could not delete address"
             }
         }
     }

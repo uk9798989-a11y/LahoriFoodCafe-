@@ -653,6 +653,129 @@ test("Branch Admin Promo & Seasonal Banner isolation: scoped strictly to assigne
   await assertFails(branch1MgrDb.collection("branch_banners").doc("banner_after_revoke").set(validBanner));
 });
 
+test("Manual saved addresses with optional landmark & FREE delivery orders (Rs. 0)", async () => {
+  const custADb = testEnv.authenticatedContext(CUSTOMER_A, { email: "custA@gmail.com", email_verified: true }).firestore();
+  const custBDb = testEnv.authenticatedContext(CUSTOMER_B, { email: "custB@gmail.com", email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+
+  const addrPayload = {
+    label: "Home",
+    streetAddress: "House 14, Street 3, Satellite Town, Taranda Muhammad Panah",
+    area: "Taranda Muhammad Panah",
+    landmark: "Opposite Al-Noor Masjid",
+    branchId: "branch_1",
+    branchName: "Lahori Food Cafe — Taranda Muhammad Panah",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Owner can save & edit manual address with landmark; other users denied
+  await assertSucceeds(custADb.collection("users").doc(CUSTOMER_A).collection("addresses").doc("addr_manual_1").set(addrPayload));
+  await assertSucceeds(
+    custADb.collection("users").doc(CUSTOMER_A).collection("addresses").doc("addr_manual_1").update({
+      streetAddress: "House 22, Street 5, Model Colony, Zahir Pir",
+      landmark: "Near Main Bus Stand",
+      branchId: "branch_2",
+      branchName: "Lahori Food Cafe — Zahir Pir",
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+  await assertFails(custBDb.collection("users").doc(CUSTOMER_A).collection("addresses").doc("addr_manual_1").get());
+
+  // Delivery order with Rs. 0 FREE delivery fee & manual address (no GPS needed) succeeds
+  await assertSucceeds(
+    custADb.collection("orders").doc("order_free_deliv_1").set({
+      userId: CUSTOMER_A,
+      guestSessionId: "",
+      guestCheckout: false,
+      customerName: "Usman Khan",
+      customerEmail: "custA@gmail.com",
+      customerPhone: "03001112233",
+      orderType: "DELIVERY",
+      deliveryAddress: "House 22, Street 5, Model Colony, Zahir Pir (Landmark: Near Main Bus Stand)",
+      branchId: "branch_2",
+      branchName: "Lahori Food Cafe — Zahir Pir",
+      branchAdminEmails: [],
+      items: [{ itemId: "zinger_1", name: "Zinger Burger", quantity: 2, unitPricePkr: 450, lineTotalPkr: 900 }],
+      itemsSummary: "2x Zinger Burger",
+      promoCode: "",
+      discountPkr: 0,
+      subtotalPkr: 900,
+      deliveryFeePkr: 0,
+      totalPkr: 900,
+      status: "Confirmed",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+});
+
+test("Admin Delivery Notifications: persistent storage, read status update, and strict branch isolation", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const custDb = testEnv.authenticatedContext(CUSTOMER_A, { email: "cust@gmail.com", email_verified: true }).firestore();
+  const branch1MgrDb = testEnv.authenticatedContext("b1_notif_mgr", { email: "b1.notif@gmail.com", email_verified: true }).firestore();
+  const branch2MgrDb = testEnv.authenticatedContext("b2_notif_mgr", { email: "b2.notif@gmail.com", email_verified: true }).firestore();
+  const superDb = testEnv.authenticatedContext(SUPER_ADMIN_UID, { email: SUPER_ADMIN_EMAIL, email_verified: true }).firestore();
+  const now = new Date(Date.now() - 2000);
+
+  await assertSucceeds(
+    superDb.collection("branch_admins").doc("b1.notif@gmail.com").set({
+      email: "b1.notif@gmail.com", role: "BranchAdmin", branchId: "branch_1", branchName: "Lahori Food Cafe TMP", createdAt: now, updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    superDb.collection("branch_admins").doc("b2.notif@gmail.com").set({
+      email: "b2.notif@gmail.com", role: "BranchAdmin", branchId: "branch_2", branchName: "Lahori Food Cafe Zahir Pir", createdAt: now, updatedAt: now,
+    })
+  );
+
+  const notifPayload = {
+    orderId: "ord_deliv_101",
+    orderNumber: "#LIV101",
+    branchId: "branch_1",
+    branchName: "Lahori Food Cafe — Taranda Muhammad Panah",
+    customerName: "Ahmad Raza",
+    customerPhone: "03009998877",
+    deliveryAddress: "House 9, Street 2, Main KLP Road, TMP (Landmark: Near Hospital)",
+    totalPkr: 1450,
+    orderType: "DELIVERY",
+    itemsSummary: "2x Extreme Pizza",
+    title: "🎉 Order Successfully Delivered!",
+    message: "The order has been successfully delivered to the customer.",
+    read: false,
+    deliveredAt: now,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Unauthenticated and Customer cannot read or create admin_notifications
+  await assertFails(unauthDb.collection("admin_notifications").doc("delivered_ord_deliv_101").set(notifPayload));
+  await assertFails(custDb.collection("admin_notifications").doc("delivered_ord_deliv_101").set(notifPayload));
+  await assertFails(custDb.collection("admin_notifications").where("branchId", "==", "branch_1").get());
+
+  // Branch 2 Admin CANNOT create notification for Branch 1
+  await assertFails(branch2MgrDb.collection("admin_notifications").doc("delivered_ord_deliv_101").set(notifPayload));
+
+  // Branch 1 Admin creates notification for Branch 1 -> SUCCEEDS
+  await assertSucceeds(branch1MgrDb.collection("admin_notifications").doc("delivered_ord_deliv_101").set(notifPayload));
+
+  // Branch 1 Admin & SuperAdmin can read; Branch 2 Admin CANNOT read or mark read
+  await assertSucceeds(branch1MgrDb.collection("admin_notifications").where("branchId", "==", "branch_1").get());
+  await assertSucceeds(superDb.collection("admin_notifications").get());
+  await assertFails(branch2MgrDb.collection("admin_notifications").where("branchId", "==", "branch_1").get());
+  await assertFails(branch2MgrDb.collection("admin_notifications").doc("delivered_ord_deliv_101").get());
+  await assertFails(branch2MgrDb.collection("admin_notifications").doc("delivered_ord_deliv_101").update({ read: true, updatedAt: new Date(Date.now() - 1000) }));
+
+  // Branch 1 Admin marks notification as read -> SUCCEEDS; tampering with totalPkr fails
+  await assertSucceeds(branch1MgrDb.collection("admin_notifications").doc("delivered_ord_deliv_101").update({ read: true, updatedAt: new Date(Date.now() - 1000) }));
+  await assertFails(branch1MgrDb.collection("admin_notifications").doc("delivered_ord_deliv_101").update({ totalPkr: 1, updatedAt: new Date(Date.now() - 500) }));
+
+  // Only SuperAdmin can delete
+  await assertFails(branch1MgrDb.collection("admin_notifications").doc("delivered_ord_deliv_101").delete());
+  await assertSucceeds(superDb.collection("admin_notifications").doc("delivered_ord_deliv_101").delete());
+});
+
+
 
 
 

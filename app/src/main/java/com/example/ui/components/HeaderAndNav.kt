@@ -71,6 +71,8 @@ import com.example.R
 import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
 import com.example.model.OrderType
+import com.example.ui.theme.LahoriBlack
+import com.example.ui.theme.LahoriGold
 import com.example.ui.theme.LahoriRed
 import com.example.ui.theme.LahoriWhite
 
@@ -259,15 +261,28 @@ fun LahoriTopHeader(
                             containerColor = LahoriRed,
                             contentColor = LahoriWhite
                         ),
-                        contentPadding = PaddingValues(vertical = 10.dp),
+                        contentPadding = PaddingValues(vertical = 10.dp, horizontal = 8.dp),
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
                             .testTag("toggle_delivery")
                     ) {
                         Icon(Icons.Filled.DeliveryDining, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text("DELIVERY", style = MaterialTheme.typography.labelLarge)
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Surface(
+                            color = LahoriBlack,
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, LahoriGold)
+                        ) {
+                            Text(
+                                text = "FREE",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Black),
+                                color = LahoriGold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 } else {
                     OutlinedButton(
@@ -278,15 +293,28 @@ fun LahoriTopHeader(
                             containerColor = MaterialTheme.colorScheme.surface,
                             contentColor = MaterialTheme.colorScheme.onSurface
                         ),
-                        contentPadding = PaddingValues(vertical = 10.dp),
+                        contentPadding = PaddingValues(vertical = 10.dp, horizontal = 8.dp),
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
                             .testTag("toggle_delivery")
                     ) {
                         Icon(Icons.Filled.DeliveryDining, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text("DELIVERY", style = MaterialTheme.typography.labelLarge)
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Surface(
+                            color = LahoriBlack,
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, LahoriGold)
+                        ) {
+                            Text(
+                                text = "FREE",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Black),
+                                color = LahoriGold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 }
 

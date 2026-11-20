@@ -103,8 +103,9 @@ service cloud.firestore {
 
     function isValidSavedAddress(data) {
       return data.label is string && data.label.size() >= 1 && data.label.size() <= 40 &&
-             data.streetAddress is string && data.streetAddress.size() >= 3 && data.streetAddress.size() <= 200 &&
-             data.area is string && data.area.size() >= 1 && data.area.size() <= 60 &&
+             data.streetAddress is string && data.streetAddress.size() >= 3 && data.streetAddress.size() <= 300 &&
+             data.area is string && data.area.size() >= 1 && data.area.size() <= 80 &&
+             (!('landmark' in data) || (data.landmark is string && data.landmark.size() <= 120)) &&
              isValidBranchId(data.branchId) &&
              data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80;
     }
@@ -151,7 +152,7 @@ service cloud.firestore {
              data.customerEmail is string && data.customerEmail.size() <= 120 &&
              data.customerPhone is string && data.customerPhone.size() <= 30 &&
              data.orderType in ['DELIVERY', 'PICKUP'] &&
-             data.deliveryAddress is string && data.deliveryAddress.size() <= 250 &&
+             data.deliveryAddress is string && data.deliveryAddress.size() <= 350 &&
              (!('deliveryLatitude' in data) || (data.deliveryLatitude is number && data.deliveryLatitude >= -90 && data.deliveryLatitude <= 90)) &&
              (!('deliveryLongitude' in data) || (data.deliveryLongitude is number && data.deliveryLongitude >= -180 && data.deliveryLongitude <= 180)) &&
              isValidBranchId(data.branchId) &&
@@ -195,6 +196,23 @@ service cloud.firestore {
              data.foodRating is int && data.foodRating >= 1 && data.foodRating <= 5 &&
              data.serviceRating is int && data.serviceRating >= 1 && data.serviceRating <= 5 &&
              data.comment is string && data.comment.size() <= 500;
+    }
+
+    function isValidAdminNotification(data) {
+      return data.orderId is string && data.orderId.size() >= 1 && data.orderId.size() <= 128 &&
+             data.orderNumber is string && data.orderNumber.size() >= 1 && data.orderNumber.size() <= 20 &&
+             isValidBranchId(data.branchId) &&
+             data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80 &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 80 &&
+             data.customerPhone is string && data.customerPhone.size() <= 30 &&
+             data.deliveryAddress is string && data.deliveryAddress.size() <= 350 &&
+             data.totalPkr is int && data.totalPkr > 0 && data.totalPkr <= 1010000 &&
+             data.orderType in ['DELIVERY', 'PICKUP'] &&
+             data.itemsSummary is string && data.itemsSummary.size() >= 1 && data.itemsSummary.size() <= 300 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.message is string && data.message.size() >= 1 && data.message.size() <= 250 &&
+             data.read is bool &&
+             data.deliveredAt is timestamp && data.deliveredAt <= request.time;
     }
 
     // 4. Collection Rules
@@ -354,7 +372,7 @@ service cloud.firestore {
         allow create: if isOwner(userId) &&
                          isValidId(addressId) &&
                          incoming().keys().hasAll(['label', 'streetAddress', 'area', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['label', 'streetAddress', 'area', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['label', 'streetAddress', 'area', 'landmark', 'branchId', 'branchName', 'createdAt', 'updatedAt']) &&
                          incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
                          incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
                          isValidSavedAddress(incoming());
@@ -364,7 +382,7 @@ service cloud.firestore {
                          isValidSavedAddress(incoming()) &&
                          incoming().createdAt == existing().createdAt &&
                          incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['label', 'streetAddress', 'area', 'branchId', 'branchName', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly(['label', 'streetAddress', 'area', 'landmark', 'branchId', 'branchName', 'updatedAt']);
 
         allow delete: if isOwner(userId) && isValidId(addressId);
       }
@@ -542,6 +560,41 @@ service cloud.firestore {
 
       allow update: if false;
       allow delete: if isSuperAdmin() && isValidId(feedbackId);
+    }
+
+    // Persistent Admin Delivery Notifications (SuperAdmin all branches; BranchAdmin strictly own branchId)
+    match /admin_notifications/{notificationId} {
+      allow list: if isSignedIn() && (
+        isSuperAdminToken() ||
+        isBranchAdminFor(resource.data.branchId)
+      );
+
+      allow get: if isSignedIn() && isValidId(notificationId) && (
+        resource == null ||
+        isSuperAdmin() ||
+        isBranchAdminFor(resource.data.branchId)
+      );
+
+      allow create: if isSignedIn() &&
+                       isValidId(notificationId) &&
+                       (isSuperAdmin() || isBranchAdminFor(incoming().branchId)) &&
+                       incoming().keys().hasAll(['orderId', 'orderNumber', 'branchId', 'branchName', 'customerName', 'customerPhone', 'deliveryAddress', 'totalPkr', 'orderType', 'itemsSummary', 'title', 'message', 'read', 'deliveredAt', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['orderId', 'orderNumber', 'branchId', 'branchName', 'customerName', 'customerPhone', 'deliveryAddress', 'totalPkr', 'orderType', 'itemsSummary', 'title', 'message', 'read', 'deliveredAt', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidAdminNotification(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(notificationId) &&
+                       (isSuperAdmin() || isBranchAdminFor(existing().branchId)) &&
+                       isValidAdminNotification(incoming()) &&
+                       incoming().orderId == existing().orderId &&
+                       incoming().branchId == existing().branchId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt']);
+
+      allow delete: if isSuperAdmin() && isValidId(notificationId);
     }
   }
 }

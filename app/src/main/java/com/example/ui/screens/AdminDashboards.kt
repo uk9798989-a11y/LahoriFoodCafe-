@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -98,6 +99,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.LocationHelper
 import com.example.data.MenuImageStorageHelper
+import com.example.model.AdminDeliveryNotification
 import com.example.model.BranchAdminEntry
 import com.example.model.BranchBanner
 import com.example.model.BranchDirectory
@@ -187,7 +189,15 @@ fun SuperAdminDashboardScreen(
     onDismissNewOrderAlert: () -> Unit = {},
     notificationsEnabled: Boolean = true,
     liveAlertsActive: Boolean = false,
-    onRequestEnableAlerts: () -> Unit = {}
+    onRequestEnableAlerts: () -> Unit = {},
+    adminNotifications: List<AdminDeliveryNotification> = emptyList(),
+    unreadNotificationCount: Int = 0,
+    deliveredPopupQueue: List<AdminDeliveryNotification> = emptyList(),
+    soundEnabled: Boolean = true,
+    onToggleSound: (Boolean) -> Unit = {},
+    onMarkNotificationRead: (String) -> Unit = {},
+    onMarkAllNotificationsRead: () -> Unit = {},
+    onDismissDeliveredPopup: () -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
 
@@ -197,6 +207,9 @@ fun SuperAdminDashboardScreen(
     var showAddMenuDialog by remember { mutableStateOf(false) }
     var editingPromotion by remember { mutableStateOf<Promotion?>(null) }
     var showPromoDialog by remember { mutableStateOf(false) }
+    var inspectedOrderDetail by remember { mutableStateOf<Pair<CafeOrder?, AdminDeliveryNotification?>?>(null) }
+
+    val allOrdersList = (allOrdersState as? UiState.Success)?.data ?: emptyList()
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -233,17 +246,38 @@ fun SuperAdminDashboardScreen(
                         contentColor = LahoriWhite,
                         edgePadding = 8.dp,
                         indicator = { tabPositions ->
-                            TabRowDefaults.SecondaryIndicator(
-                                modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
-                                color = LahoriRed
-                            )
+                            if (selectedTabIndex < tabPositions.size) {
+                                TabRowDefaults.SecondaryIndicator(
+                                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                                    color = LahoriRed
+                                )
+                            }
                         }
                     ) {
                         Tab(
                             selected = selectedTabIndex == 0,
                             onClick = { selectedTabIndex = 0 },
-                            text = { Text("ORDERS", fontSize = 11.sp, maxLines = 1) },
-                            icon = { Icon(Icons.Filled.ReceiptLong, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text("ORDERS", fontSize = 11.sp, maxLines = 1)
+                                    if (unreadNotificationCount > 0) {
+                                        Surface(color = LahoriRed, shape = CircleShape) {
+                                            Text(
+                                                text = "$unreadNotificationCount",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = LahoriWhite,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            icon = { Icon(Icons.Filled.ReceiptLong, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            modifier = Modifier.testTag("admin_tab_orders")
                         )
                         Tab(
                             selected = selectedTabIndex == 1,
@@ -276,6 +310,31 @@ fun SuperAdminDashboardScreen(
                             onClick = { selectedTabIndex = 5 },
                             text = { Text("REVIEWS", fontSize = 11.sp, maxLines = 1) },
                             icon = { Icon(Icons.Filled.Star, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                        )
+                        Tab(
+                            selected = selectedTabIndex == 6,
+                            onClick = { selectedTabIndex = 6 },
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text("ALERTS", fontSize = 11.sp, maxLines = 1)
+                                    if (unreadNotificationCount > 0) {
+                                        Surface(color = LahoriGold, shape = CircleShape) {
+                                            Text(
+                                                text = "$unreadNotificationCount",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = LahoriBlack,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            icon = { Icon(Icons.Filled.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            modifier = Modifier.testTag("admin_tab_notifications")
                         )
                     }
                 }
@@ -351,7 +410,8 @@ fun SuperAdminDashboardScreen(
                                     items(filteredOrders, key = { it.id }) { order ->
                                         AdminOrderControlCard(
                                             order = order,
-                                            onChangeStatus = { status -> onUpdateOrderStatus(order.id, status) }
+                                            onChangeStatus = { status -> onUpdateOrderStatus(order.id, status) },
+                                            onViewDetails = { inspectedOrderDetail = order to null }
                                         )
                                     }
                                 }
@@ -430,7 +490,6 @@ fun SuperAdminDashboardScreen(
                                         imageUrl = item.imageUrl,
                                         contentDescription = item.name,
                                         compact = true,
-                                        itemId = item.id,
                                         modifier = Modifier
                                             .size(62.dp)
                                             .clip(RoundedCornerShape(12.dp))
@@ -627,8 +686,46 @@ fun SuperAdminDashboardScreen(
                         onDeleteFeedback = onDeleteFeedback
                     )
                 }
+
+                6 -> {
+                    AdminNotificationsHistoryTab(
+                        notifications = adminNotifications,
+                        soundEnabled = soundEnabled,
+                        onToggleSound = onToggleSound,
+                        onOpenNotification = { notif ->
+                            if (!notif.read) onMarkNotificationRead(notif.id)
+                            val matched = allOrdersList.firstOrNull { it.id == notif.orderId }
+                            inspectedOrderDetail = matched to notif
+                        },
+                        onMarkAllRead = onMarkAllNotificationsRead
+                    )
+                }
             }
         }
+    }
+
+    // Instant Real-Time Order Delivered Popup (triggers on ANY Super Admin tab)
+    val activePopup = deliveredPopupQueue.firstOrNull()
+    if (activePopup != null) {
+        OrderDeliveredPopupModal(
+            notification = activePopup,
+            remainingInQueue = (deliveredPopupQueue.size - 1).coerceAtLeast(0),
+            onViewOrder = { notif ->
+                if (!notif.read) onMarkNotificationRead(notif.id)
+                onDismissDeliveredPopup()
+                val matched = allOrdersList.firstOrNull { it.id == notif.orderId }
+                inspectedOrderDetail = matched to notif
+            },
+            onDismiss = onDismissDeliveredPopup
+        )
+    }
+
+    inspectedOrderDetail?.let { (order, fallbackNotif) ->
+        AdminOrderDetailDialog(
+            order = order,
+            notificationFallback = fallbackNotif,
+            onDismiss = { inspectedOrderDetail = null }
+        )
     }
 
     if (showAddMenuDialog) {
@@ -1798,7 +1895,15 @@ fun BranchAdminDashboardScreen(
     onDeleteBranchBanner: (String) -> Unit = {},
     notificationsEnabled: Boolean = true,
     liveAlertsActive: Boolean = false,
-    onRequestEnableAlerts: () -> Unit = {}
+    onRequestEnableAlerts: () -> Unit = {},
+    adminNotifications: List<AdminDeliveryNotification> = emptyList(),
+    unreadNotificationCount: Int = 0,
+    deliveredPopupQueue: List<AdminDeliveryNotification> = emptyList(),
+    soundEnabled: Boolean = true,
+    onToggleSound: (Boolean) -> Unit = {},
+    onMarkNotificationRead: (String) -> Unit = {},
+    onMarkAllNotificationsRead: () -> Unit = {},
+    onDismissDeliveredPopup: () -> Unit = {}
 ) {
     val isRestrictedRootMode = onSignOut != null
     if (!isRestrictedRootMode) {
@@ -1807,6 +1912,9 @@ fun BranchAdminDashboardScreen(
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var orderFilter by remember { mutableStateOf("ALL") }
+    var inspectedOrderDetail by remember { mutableStateOf<Pair<CafeOrder?, AdminDeliveryNotification?>?>(null) }
+    val allOrdersList = (ordersState as? UiState.Success)?.data ?: emptyList()
+
     val branchLabel = remember(branchId, branches, branchName) {
         BranchDirectory.shortPickerLabel(branchId, branches)
             .ifBlank { branchName.substringAfter("— ").trim().ifBlank { branchId } }
@@ -1923,19 +2031,31 @@ fun BranchAdminDashboardScreen(
                             text = {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.ReceiptLong,
                                         contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
+                                        modifier = Modifier.size(15.dp),
                                         tint = if (selectedTab == 0) LahoriGold else LahoriWhite.copy(alpha = 0.7f)
                                     )
                                     Text(
                                         text = "ORDERS",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = if (selectedTab == 0) LahoriWhite else LahoriWhite.copy(alpha = 0.7f)
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selectedTab == 0) LahoriWhite else LahoriWhite.copy(alpha = 0.7f),
+                                        maxLines = 1
                                     )
+                                    if (unreadNotificationCount > 0) {
+                                        Surface(color = LahoriRed, shape = CircleShape) {
+                                            Text(
+                                                text = "$unreadNotificationCount",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = LahoriWhite,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         )
@@ -1946,19 +2066,55 @@ fun BranchAdminDashboardScreen(
                             text = {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.LocalOffer,
                                         contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
+                                        modifier = Modifier.size(15.dp),
                                         tint = if (selectedTab == 1) LahoriGold else LahoriWhite.copy(alpha = 0.7f)
                                     )
                                     Text(
                                         text = if (livePromoCount > 0) "PROMOS ($livePromoCount)" else "PROMOS",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = if (selectedTab == 1) LahoriWhite else LahoriWhite.copy(alpha = 0.7f)
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selectedTab == 1) LahoriWhite else LahoriWhite.copy(alpha = 0.7f),
+                                        maxLines = 1
                                     )
+                                }
+                            }
+                        )
+                        Tab(
+                            selected = selectedTab == 2,
+                            onClick = { selectedTab = 2 },
+                            modifier = Modifier.testTag("branch_admin_tab_notifications"),
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.NotificationsActive,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp),
+                                        tint = if (selectedTab == 2) LahoriGold else LahoriWhite.copy(alpha = 0.7f)
+                                    )
+                                    Text(
+                                        text = "ALERTS",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selectedTab == 2) LahoriWhite else LahoriWhite.copy(alpha = 0.7f),
+                                        maxLines = 1
+                                    )
+                                    if (unreadNotificationCount > 0) {
+                                        Surface(color = LahoriGold, shape = CircleShape) {
+                                            Text(
+                                                text = "$unreadNotificationCount",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = LahoriBlack,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         )
@@ -1986,6 +2142,18 @@ fun BranchAdminDashboardScreen(
                     onDeleteBranchPromo = onDeleteBranchPromo,
                     onSaveBranchBanner = onSaveBranchBanner,
                     onDeleteBranchBanner = onDeleteBranchBanner
+                )
+            } else if (selectedTab == 2) {
+                AdminNotificationsHistoryTab(
+                    notifications = adminNotifications,
+                    soundEnabled = soundEnabled,
+                    onToggleSound = onToggleSound,
+                    onOpenNotification = { notif ->
+                        if (!notif.read) onMarkNotificationRead(notif.id)
+                        val matched = allOrdersList.firstOrNull { it.id == notif.orderId }
+                        inspectedOrderDetail = matched to notif
+                    },
+                    onMarkAllRead = onMarkAllNotificationsRead
                 )
             } else when (ordersState) {
                 is UiState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -2184,7 +2352,8 @@ fun BranchAdminDashboardScreen(
                             items(visibleOrders, key = { it.id }) { order ->
                                 AdminOrderControlCard(
                                     order = order,
-                                    onChangeStatus = { status -> onUpdateOrderStatus(order.id, status) }
+                                    onChangeStatus = { status -> onUpdateOrderStatus(order.id, status) },
+                                    onViewDetails = { inspectedOrderDetail = order to null }
                                 )
                             }
                         }
@@ -2192,6 +2361,30 @@ fun BranchAdminDashboardScreen(
                 }
             }
         }
+    }
+
+    // Instant Real-Time Order Delivered Popup (triggers on ANY Branch Admin tab)
+    val activePopup = deliveredPopupQueue.firstOrNull()
+    if (activePopup != null) {
+        OrderDeliveredPopupModal(
+            notification = activePopup,
+            remainingInQueue = (deliveredPopupQueue.size - 1).coerceAtLeast(0),
+            onViewOrder = { notif ->
+                if (!notif.read) onMarkNotificationRead(notif.id)
+                onDismissDeliveredPopup()
+                val matched = allOrdersList.firstOrNull { it.id == notif.orderId }
+                inspectedOrderDetail = matched to notif
+            },
+            onDismiss = onDismissDeliveredPopup
+        )
+    }
+
+    inspectedOrderDetail?.let { (order, fallbackNotif) ->
+        AdminOrderDetailDialog(
+            order = order,
+            notificationFallback = fallbackNotif,
+            onDismiss = { inspectedOrderDetail = null }
+        )
     }
 }
 
@@ -2338,7 +2531,8 @@ private fun IncomingOrderAlertBanner(
 @Composable
 private fun AdminOrderControlCard(
     order: CafeOrder,
-    onChangeStatus: (OrderStatus) -> Unit
+    onChangeStatus: (OrderStatus) -> Unit,
+    onViewDetails: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val currentStatus = OrderStatus.fromString(order.status)
@@ -2375,14 +2569,41 @@ private fun AdminOrderControlCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Text(
-                    text = formatPkr(order.totalPkr),
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = LahoriRed
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = formatPkr(order.totalPkr),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = LahoriRed
+                    )
+                    Text(
+                        text = if (order.deliveryFeePkr == 0L) "Delivery: Rs. 0 (FREE)" else "Delivery: ${formatPkr(order.deliveryFeePkr)}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = LahoriSuccess
+                    )
+                }
             }
 
             Text(order.itemsSummary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+
+            if (onViewDetails != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Subtotal: ${formatPkr(order.subtotalPkr)} • Delivery Charges: Rs. 0",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TextButton(
+                        onClick = onViewDetails,
+                        modifier = Modifier.testTag("admin_view_order_details_${order.id}")
+                    ) {
+                        Text("VIEW DETAILS", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = LahoriRed)
+                    }
+                }
+            }
 
             if (order.customerPhone.isNotBlank()) {
                 Row(
@@ -2638,7 +2859,7 @@ private fun MenuEditorDialog(
                                     text = when {
                                         pickedImageUri != null -> "READY TO UPLOAD"
                                         imageUrl.isNotBlank() -> "CUSTOM PHOTO"
-                                        else -> "MENU PHOTO"
+                                        else -> "ARTWORK THEME"
                                     },
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontSize = 9.sp,
@@ -2668,7 +2889,6 @@ private fun MenuEditorDialog(
                                 imageUrl = imageUrl,
                                 previewModel = pickedImageUri,
                                 contentDescription = name.ifBlank { "Menu item photo preview" },
-                                itemId = initialItem?.id.orEmpty(),
                                 modifier = Modifier.fillMaxSize()
                             )
                             if (!isSaving) {

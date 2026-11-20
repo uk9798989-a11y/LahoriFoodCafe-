@@ -27,8 +27,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeliveryDining
 import androidx.compose.material.icons.filled.Directions
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Schedule
@@ -71,6 +74,7 @@ import com.example.model.BranchDirectory
 import com.example.model.CafeBranch
 import com.example.model.OrderType
 import com.example.model.SavedAddress
+import com.example.ui.theme.LahoriBlack
 import com.example.ui.theme.LahoriDarkCard
 import com.example.ui.theme.LahoriDarkSheet
 import com.example.ui.theme.LahoriGold
@@ -85,12 +89,14 @@ fun SavedAddressesBottomSheet(
     savedAddresses: List<SavedAddress>,
     selectedAddressStreet: String,
     onSelectAddress: (SavedAddress) -> Unit,
-    onAddNewAddress: (label: String, street: String, area: String) -> Unit,
+    onAddNewAddress: (label: String, street: String, area: String) -> Unit = { _, _, _ -> },
     onStartOrder: () -> Unit,
     onDismiss: () -> Unit,
     branches: List<CafeBranch> = BranchDirectory.defaultBranches,
     orderType: OrderType = OrderType.DELIVERY,
     selectedBranchId: String = BranchDirectory.branch1.id,
+    selectedLandmark: String = "",
+    selectedAddressLabel: String = "Home",
     deviceLatitude: Double? = null,
     deviceLongitude: Double? = null,
     detectedGpsAddress: String = "",
@@ -98,17 +104,28 @@ fun SavedAddressesBottomSheet(
     onOrderTypeChange: (OrderType) -> Unit = {},
     onUseCurrentLocation: () -> Unit = {},
     onSelectPickupBranch: (CafeBranch) -> Unit = {},
-    onSelectQuickArea: (area: String, branchId: String) -> Unit = { _, _ -> }
+    onSelectQuickArea: (area: String, branchId: String) -> Unit = { _, _ -> },
+    onSaveManualAddress: (editingAddressId: String?, label: String, fullAddress: String, landmark: String) -> Unit = { _, lbl, addr, _ ->
+        onAddNewAddress(lbl, addr, "")
+    },
+    onDeleteAddress: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var activeMode by remember(orderType) { mutableStateOf(orderType) }
     var searchQuery by remember { mutableStateOf("") }
-    var showAddForm by remember { mutableStateOf(false) }
-    var labelInput by remember { mutableStateOf("Home") }
-    var streetInput by remember { mutableStateOf("") }
-    var areaInput by remember { mutableStateOf("Taranda Muhammad Panah (TMP)") }
+    var editingAddressId by remember { mutableStateOf<String?>(null) }
+    var labelInput by remember(selectedAddressLabel) {
+        mutableStateOf(selectedAddressLabel.ifBlank { "Home" })
+    }
+    var fullAddressInput by remember(selectedAddressStreet) {
+        mutableStateOf(selectedAddressStreet)
+    }
+    var landmarkInput by remember(selectedLandmark) {
+        mutableStateOf(selectedLandmark)
+    }
     var validationError by remember { mutableStateOf<String?>(null) }
+    var saveSuccessMessage by remember { mutableStateOf<String?>(null) }
     var permissionDeniedNote by remember { mutableStateOf<String?>(null) }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -120,7 +137,7 @@ fun SavedAddressesBottomSheet(
             permissionDeniedNote = null
             onUseCurrentLocation()
         } else {
-            permissionDeniedNote = "Location permission denied. Choose a branch or delivery zone below."
+            permissionDeniedNote = "GPS is optional — you can type your complete address above anytime."
         }
     }
 
@@ -174,18 +191,24 @@ fun SavedAddressesBottomSheet(
             it.label.lowercase().contains(query) ||
                 it.area.lowercase().contains(query) ||
                 it.streetAddress.lowercase().contains(query) ||
+                it.landmark.lowercase().contains(query) ||
                 it.branchName.lowercase().contains(query)
         }
     }
 
-    val previewBranch = remember(areaInput, streetInput, activeBranches) {
-        BranchDirectory.routeAddressToBranch("$areaInput $streetInput", activeBranches)
+    val previewBranch = remember(fullAddressInput, landmarkInput, activeBranches) {
+        val combined = "$fullAddressInput $landmarkInput".trim()
+        if (combined.isBlank()) {
+            BranchDirectory.byId(selectedBranchId, activeBranches)
+        } else {
+            BranchDirectory.routeAddressToBranch(combined, activeBranches)
+        }
     }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = LahoriDarkSheet,
+        containerColor = LahoriBlack,
         contentColor = LahoriWhite,
         dragHandle = null
     ) {
@@ -204,14 +227,18 @@ fun SavedAddressesBottomSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (activeMode == OrderType.DELIVERY) "CHOOSE LOCATION & BRANCH" else "SELECT PICKUP STORE",
+                        text = if (activeMode == OrderType.DELIVERY) "DELIVERY ADDRESS" else "SELECT PICKUP STORE",
                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black),
                         color = LahoriWhite
                     )
                     Text(
-                        text = "Lahori Food Cafe • TMP & Zahir Pir Live Store Finder",
+                        text = if (activeMode == OrderType.DELIVERY) {
+                            "FREE DELIVERY (Rs. 0) • Type your address manually — no GPS needed"
+                        } else {
+                            "Lahori Food Cafe • TMP & Zahir Pir Live Store Finder"
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = LahoriWhite.copy(alpha = 0.68f)
+                        color = LahoriGold
                     )
                 }
 
@@ -233,11 +260,11 @@ fun SavedAddressesBottomSheet(
                 }
             }
 
-            // KFC-style Segmented Delivery / Pickup Mode Switcher
+            // Segmented Delivery / Pickup Mode Switcher
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = LahoriDarkCard,
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
+                border = BorderStroke(1.dp, LahoriGold.copy(alpha = 0.28f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -273,7 +300,7 @@ fun SavedAddressesBottomSheet(
                                 )
                                 Spacer(Modifier.width(6.dp))
                                 Text(
-                                    text = mode.label,
+                                    text = if (mode == OrderType.DELIVERY) "DELIVERY • FREE" else mode.label,
                                     style = MaterialTheme.typography.labelLarge,
                                     color = LahoriWhite
                                 )
@@ -283,164 +310,583 @@ fun SavedAddressesBottomSheet(
                 }
             }
 
-            // Use GPS Location Card + Search Field
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = {
-                        if (LocationHelper.hasLocationPermission(context)) {
-                            permissionDeniedNote = null
-                            onUseCurrentLocation()
-                        } else {
-                            locationPermissionLauncher.launch(
-                                arrayOf(
-                                    Manifest.permission.ACCESS_FINE_LOCATION,
-                                    Manifest.permission.ACCESS_COARSE_LOCATION
-                                )
-                            )
-                        }
-                    },
-                    enabled = !isLocatingGps,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = LahoriGold,
-                        contentColor = Color(0xFF141414)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("use_gps_location_button")
-                ) {
-                    if (isLocatingGps) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = Color(0xFF141414),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("DETECTING NEAREST BRANCH...", style = MaterialTheme.typography.labelLarge)
-                    } else {
-                        Icon(Icons.Filled.MyLocation, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("USE MY GPS LOCATION", style = MaterialTheme.typography.labelLarge)
-                    }
-                }
-
-                if (permissionDeniedNote != null) {
-                    Text(
-                        text = permissionDeniedNote!!,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = LahoriGold
-                    )
-                }
-
-                if (detectedGpsAddress.isNotBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = LahoriSuccess.copy(alpha = 0.16f),
-                        border = BorderStroke(1.dp, LahoriSuccess.copy(alpha = 0.5f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Filled.LocationOn, contentDescription = null, tint = Color(0xFF4ADE80), modifier = Modifier.size(18.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "DETECTED GPS LOCATION",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = Color(0xFF4ADE80)
-                                )
-                                Text(
-                                    text = detectedGpsAddress,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = LahoriWhite,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = {
-                        Text(
-                            text = "Search TMP, Zahir Pir, KLP Road, Khanpur...",
-                            color = LahoriWhite.copy(alpha = 0.55f)
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(Icons.Filled.Search, contentDescription = null, tint = LahoriGold)
-                    },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = LahoriWhite)
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = LahoriWhite,
-                        unfocusedTextColor = LahoriWhite,
-                        focusedBorderColor = LahoriGold,
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.22f),
-                        focusedContainerColor = LahoriDarkCard,
-                        unfocusedContainerColor = LahoriDarkCard
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("location_search_input")
-                )
-            }
-
-            // Scrollable Stores, Quick Zones, and Saved Addresses
+            // Main Scrollable Area: Default Manual Address Form + Saved Addresses + Branches + Optional GPS
             LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 180.dp, max = 330.dp)
+                    .heightIn(min = 240.dp, max = 440.dp)
             ) {
-                if (activeMode == OrderType.DELIVERY && quickAreas.isNotEmpty()) {
-                    item(key = "quick_zones_section") {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(
-                                text = "DELIVERY AREAS",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = LahoriGold
-                            )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                // DEFAULT MANUAL ADDRESS FORM (always visible in Delivery mode)
+                if (activeMode == OrderType.DELIVERY) {
+                    item(key = "manual_address_form_card") {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = LahoriDarkCard,
+                            border = BorderStroke(1.5.dp, LahoriGold.copy(alpha = 0.65f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                quickAreas.forEach { zone ->
-                                    val isAreaSelected = selectedAddressStreet.contains(zone, ignoreCase = true)
-                                    FilterChip(
-                                        selected = isAreaSelected,
-                                        onClick = {
-                                            val matchedBranch = BranchDirectory.routeAddressToBranch(zone, activeBranches)
-                                            areaInput = zone
-                                            onSelectQuickArea(zone, matchedBranch.id)
-                                        },
-                                        label = { Text(zone, fontSize = 11.sp) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = LahoriRed,
-                                            selectedLabelColor = LahoriWhite,
-                                            containerColor = LahoriDarkCard,
-                                            labelColor = LahoriWhite.copy(alpha = 0.88f)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.LocationOn,
+                                            contentDescription = null,
+                                            tint = LahoriGold,
+                                            modifier = Modifier.size(18.dp)
                                         )
-                                    )
+                                        Text(
+                                            text = if (editingAddressId != null) "EDIT SAVED ADDRESS" else "ENTER DELIVERY ADDRESS",
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Black),
+                                            color = LahoriGold
+                                        )
+                                    }
+
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = LahoriSuccess.copy(alpha = 0.2f),
+                                        border = BorderStroke(1.dp, Color(0xFF4ADE80).copy(alpha = 0.6f))
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.LocalOffer,
+                                                contentDescription = null,
+                                                tint = Color(0xFF4ADE80),
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Text(
+                                                text = "FREE DELIVERY",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontWeight = FontWeight.Black,
+                                                    fontSize = 10.sp
+                                                ),
+                                                color = Color(0xFF4ADE80)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Quick Label Chips
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    listOf("Home", "Office", "Shop", "Other").forEach { tag ->
+                                        val isTagSelected = labelInput.equals(tag, ignoreCase = true)
+                                        FilterChip(
+                                            selected = isTagSelected,
+                                            onClick = { labelInput = tag },
+                                            label = {
+                                                Text(
+                                                    text = tag,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = LahoriGold,
+                                                selectedLabelColor = LahoriBlack,
+                                                containerColor = LahoriBlack,
+                                                labelColor = LahoriWhite.copy(alpha = 0.85f)
+                                            )
+                                        )
+                                    }
+                                }
+
+                                // Complete Delivery Address Input (Required)
+                                OutlinedTextField(
+                                    value = fullAddressInput,
+                                    onValueChange = {
+                                        fullAddressInput = it
+                                        validationError = null
+                                        saveSuccessMessage = null
+                                    },
+                                    label = { Text("Complete Delivery Address *") },
+                                    placeholder = {
+                                        Text(
+                                            text = "Enter your complete delivery address (House No, Street, Area, Landmark)",
+                                            color = LahoriWhite.copy(alpha = 0.55f),
+                                            fontSize = 13.sp
+                                        )
+                                    },
+                                    minLines = 2,
+                                    maxLines = 4,
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = LahoriWhite,
+                                        unfocusedTextColor = LahoriWhite,
+                                        focusedBorderColor = LahoriGold,
+                                        unfocusedBorderColor = Color.White.copy(alpha = 0.28f),
+                                        focusedLabelColor = LahoriGold,
+                                        unfocusedLabelColor = LahoriWhite.copy(alpha = 0.72f),
+                                        focusedContainerColor = LahoriBlack,
+                                        unfocusedContainerColor = LahoriBlack,
+                                        cursorColor = LahoriGold
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("address_street_input")
+                                )
+
+                                // Optional Nearby Landmark Input
+                                OutlinedTextField(
+                                    value = landmarkInput,
+                                    onValueChange = {
+                                        landmarkInput = it
+                                        saveSuccessMessage = null
+                                    },
+                                    label = { Text("Nearby landmark (optional)") },
+                                    placeholder = {
+                                        Text(
+                                            text = "Nearby landmark (optional)",
+                                            color = LahoriWhite.copy(alpha = 0.55f),
+                                            fontSize = 13.sp
+                                        )
+                                    },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = LahoriWhite,
+                                        unfocusedTextColor = LahoriWhite,
+                                        focusedBorderColor = LahoriGold,
+                                        unfocusedBorderColor = Color.White.copy(alpha = 0.24f),
+                                        focusedLabelColor = LahoriGold,
+                                        unfocusedLabelColor = LahoriWhite.copy(alpha = 0.68f),
+                                        focusedContainerColor = LahoriBlack,
+                                        unfocusedContainerColor = LahoriBlack,
+                                        cursorColor = LahoriGold
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("address_landmark_input")
+                                )
+
+                                Text(
+                                    text = "Serving Branch: ${previewBranch.displayShortLabel()} (${previewBranch.name}) • Rs. 0 Delivery",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = LahoriGold
+                                )
+
+                                if (validationError != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = LahoriRed.copy(alpha = 0.18f),
+                                        border = BorderStroke(1.dp, LahoriRed),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = validationError!!,
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = LahoriWhite,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                                        )
+                                    }
+                                }
+
+                                if (saveSuccessMessage != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = LahoriSuccess.copy(alpha = 0.2f),
+                                        border = BorderStroke(1.dp, Color(0xFF4ADE80)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.CheckCircle,
+                                                contentDescription = null,
+                                                tint = Color(0xFF4ADE80),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                text = saveSuccessMessage!!,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                                color = Color(0xFF4ADE80)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (editingAddressId != null) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                editingAddressId = null
+                                                labelInput = "Home"
+                                                fullAddressInput = selectedAddressStreet
+                                                landmarkInput = selectedLandmark
+                                                validationError = null
+                                            },
+                                            shape = RoundedCornerShape(10.dp),
+                                            border = BorderStroke(1.dp, LahoriWhite.copy(alpha = 0.45f)),
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = LahoriWhite),
+                                            modifier = Modifier.height(48.dp)
+                                        ) {
+                                            Text("CANCEL", style = MaterialTheme.typography.labelLarge)
+                                        }
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            val cleanAddr = fullAddressInput.trim()
+                                            val cleanLandmark = landmarkInput.trim()
+                                            if (cleanAddr.isBlank()) {
+                                                validationError = "Please enter your complete delivery address (House No, Street, Area, City)."
+                                            } else if (cleanAddr.length < 3) {
+                                                validationError = "Please enter a complete delivery address (at least 3 characters)."
+                                            } else {
+                                                validationError = null
+                                                val wasEdit = editingAddressId != null
+                                                onSaveManualAddress(
+                                                    editingAddressId,
+                                                    labelInput.trim().ifBlank { "Home" },
+                                                    cleanAddr,
+                                                    cleanLandmark
+                                                )
+                                                editingAddressId = null
+                                                saveSuccessMessage = if (wasEdit) {
+                                                    "Address updated and saved for future orders!"
+                                                } else {
+                                                    "Address saved! It will auto-fill on your future orders."
+                                                }
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = LahoriRed,
+                                            contentColor = LahoriWhite
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(48.dp)
+                                            .testTag("save_new_address_btn")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.CheckCircle,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = if (editingAddressId != null) "UPDATE ADDRESS" else "SAVE ADDRESS",
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Black)
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
+
+                    // Saved Addresses List with Edit / Delete / Select
+                    if (filteredAddresses.isNotEmpty()) {
+                        item(key = "saved_addresses_heading") {
+                            Text(
+                                text = "YOUR SAVED ADDRESSES (${filteredAddresses.size}) • TAP TO USE OR EDIT",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = LahoriGold,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        items(filteredAddresses.size, key = { idx -> "addr_${filteredAddresses[idx].id}" }) { idx ->
+                            val addr = filteredAddresses[idx]
+                            val isSelected = selectedAddressStreet.isNotBlank() &&
+                                (selectedAddressStreet.equals(addr.streetAddress, ignoreCase = true) ||
+                                    selectedAddressStreet.contains(addr.streetAddress, ignoreCase = true))
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = LahoriDarkCard,
+                                border = BorderStroke(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) LahoriGold else Color.White.copy(alpha = 0.14f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        fullAddressInput = addr.streetAddress
+                                        landmarkInput = addr.landmark
+                                        labelInput = addr.label.ifBlank { "Home" }
+                                        editingAddressId = null
+                                        validationError = null
+                                        saveSuccessMessage = "Selected '${addr.label}' address for delivery."
+                                        onSelectAddress(addr)
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.Top,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isSelected) Icons.Filled.CheckCircle else Icons.Filled.LocationOn,
+                                            contentDescription = null,
+                                            tint = if (isSelected) LahoriGold else LahoriRed,
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text(
+                                                text = if (addr.area.isNotBlank()) "${addr.label} • ${addr.area}" else addr.label,
+                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = LahoriWhite
+                                            )
+                                            Text(
+                                                text = addr.streetAddress,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = LahoriWhite.copy(alpha = 0.84f)
+                                            )
+                                            if (addr.landmark.isNotBlank()) {
+                                                Text(
+                                                    text = "Landmark: ${addr.landmark}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = LahoriWhite.copy(alpha = 0.65f)
+                                                )
+                                            }
+                                            Text(
+                                                text = "${addr.branchName} • FREE Delivery",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LahoriGold
+                                            )
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(
+                                            onClick = {
+                                                editingAddressId = addr.id
+                                                labelInput = addr.label.ifBlank { "Home" }
+                                                fullAddressInput = addr.streetAddress
+                                                landmarkInput = addr.landmark
+                                                validationError = null
+                                                saveSuccessMessage = null
+                                            },
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .testTag("edit_saved_address_${addr.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Edit,
+                                                contentDescription = "Edit saved address",
+                                                tint = LahoriGold,
+                                                modifier = Modifier.size(19.dp)
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { onDeleteAddress(addr.id) },
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .testTag("delete_saved_address_${addr.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.DeleteOutline,
+                                                contentDescription = "Delete saved address",
+                                                tint = LahoriRed,
+                                                modifier = Modifier.size(19.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Quick Delivery Areas
+                    if (quickAreas.isNotEmpty()) {
+                        item(key = "quick_zones_section") {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "QUICK DELIVERY AREAS (TAP TO FILL)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = LahoriGold
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    quickAreas.forEach { zone ->
+                                        val isAreaSelected = fullAddressInput.contains(zone, ignoreCase = true)
+                                        FilterChip(
+                                            selected = isAreaSelected,
+                                            onClick = {
+                                                val matchedBranch = BranchDirectory.routeAddressToBranch(zone, activeBranches)
+                                                if (fullAddressInput.isBlank()) {
+                                                    fullAddressInput = zone
+                                                } else if (!fullAddressInput.contains(zone, ignoreCase = true)) {
+                                                    fullAddressInput = "${fullAddressInput.trim()}, $zone"
+                                                }
+                                                onSelectQuickArea(zone, matchedBranch.id)
+                                            },
+                                            label = { Text(zone, fontSize = 11.sp) },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = LahoriRed,
+                                                selectedLabelColor = LahoriWhite,
+                                                containerColor = LahoriDarkCard,
+                                                labelColor = LahoriWhite.copy(alpha = 0.88f)
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Secondary Optional GPS Button (never required)
+                    item(key = "optional_gps_section") {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (LocationHelper.hasLocationPermission(context)) {
+                                        permissionDeniedNote = null
+                                        onUseCurrentLocation()
+                                    } else {
+                                        locationPermissionLauncher.launch(
+                                            arrayOf(
+                                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                                Manifest.permission.ACCESS_COARSE_LOCATION
+                                            )
+                                        )
+                                    }
+                                },
+                                enabled = !isLocatingGps,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, LahoriGold.copy(alpha = 0.55f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = LahoriGold),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("use_gps_location_button")
+                            ) {
+                                if (isLocatingGps) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = LahoriGold,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("DETECTING GPS (OPTIONAL)...", style = MaterialTheme.typography.labelLarge)
+                                } else {
+                                    Icon(Icons.Filled.MyLocation, contentDescription = null, modifier = Modifier.size(17.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("USE CURRENT GPS LOCATION (OPTIONAL)", style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+
+                            if (permissionDeniedNote != null) {
+                                Text(
+                                    text = permissionDeniedNote!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = LahoriGold
+                                )
+                            }
+
+                            if (detectedGpsAddress.isNotBlank()) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = LahoriSuccess.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, LahoriSuccess.copy(alpha = 0.45f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Filled.LocationOn, contentDescription = null, tint = Color(0xFF4ADE80), modifier = Modifier.size(16.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "OPTIONAL GPS DETECTED",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = Color(0xFF4ADE80)
+                                            )
+                                            Text(
+                                                text = detectedGpsAddress,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = LahoriWhite,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                fullAddressInput = detectedGpsAddress
+                                                validationError = null
+                                            }
+                                        ) {
+                                            Text("USE", color = LahoriGold, style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // PICKUP MODE: Search + Optional GPS + Store List
+                    item(key = "pickup_controls") {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = {
+                                    Text(
+                                        text = "Search TMP, Zahir Pir, KLP Road, Khanpur...",
+                                        color = LahoriWhite.copy(alpha = 0.55f)
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.Search, contentDescription = null, tint = LahoriGold)
+                                },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = LahoriWhite)
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = LahoriWhite,
+                                    unfocusedTextColor = LahoriWhite,
+                                    focusedBorderColor = LahoriGold,
+                                    unfocusedBorderColor = Color.White.copy(alpha = 0.22f),
+                                    focusedContainerColor = LahoriDarkCard,
+                                    unfocusedContainerColor = LahoriDarkCard
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("location_search_input")
+                            )
+                        }
+                    }
                 }
 
+                // Branches List (available in both modes)
                 item(key = "branches_heading") {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -479,233 +925,43 @@ fun SavedAddressesBottomSheet(
                         }
                     )
                 }
-
-                if (activeMode == OrderType.DELIVERY && filteredAddresses.isNotEmpty()) {
-                    item(key = "saved_addresses_heading") {
-                        Text(
-                            text = "YOUR SAVED ADDRESSES (${filteredAddresses.size})",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = LahoriGold,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-                    items(filteredAddresses.size, key = { idx -> "addr_${filteredAddresses[idx].id}" }) { idx ->
-                        val addr = filteredAddresses[idx]
-                        val isSelected = selectedAddressStreet.contains(addr.streetAddress)
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = LahoriDarkCard,
-                            border = BorderStroke(
-                                width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) LahoriRed else Color.White.copy(alpha = 0.14f)
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onSelectAddress(addr) }
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.LocationOn,
-                                        contentDescription = null,
-                                        tint = LahoriRed
-                                    )
-                                    Column {
-                                        Text(
-                                            text = "${addr.label} • ${addr.area}",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            color = LahoriWhite
-                                        )
-                                        Text(
-                                            text = addr.streetAddress,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = LahoriWhite.copy(alpha = 0.72f)
-                                        )
-                                        Text(
-                                            text = "${addr.branchId.uppercase()}: ${addr.branchName}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = LahoriGold,
-                                            modifier = Modifier.padding(top = 2.dp)
-                                        )
-                                    }
-                                }
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Filled.CheckCircle,
-                                        contentDescription = "Selected",
-                                        tint = LahoriRed
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
-            AnimatedVisibility(visible = activeMode == OrderType.DELIVERY && showAddForm) {
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = LahoriDarkCard,
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "ADD FULL DELIVERY ADDRESS",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = LahoriGold
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                value = labelInput,
-                                onValueChange = { labelInput = it },
-                                label = { Text("Label") },
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = LahoriWhite,
-                                    unfocusedTextColor = LahoriWhite,
-                                    focusedBorderColor = LahoriRed,
-                                    unfocusedBorderColor = Color.White.copy(alpha = 0.25f),
-                                    focusedLabelColor = LahoriWhite,
-                                    unfocusedLabelColor = LahoriWhite.copy(alpha = 0.65f)
-                                ),
-                                modifier = Modifier.weight(0.38f)
-                            )
-                            OutlinedTextField(
-                                value = areaInput,
-                                onValueChange = { areaInput = it },
-                                label = { Text("Area / City") },
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = LahoriWhite,
-                                    unfocusedTextColor = LahoriWhite,
-                                    focusedBorderColor = LahoriRed,
-                                    unfocusedBorderColor = Color.White.copy(alpha = 0.25f),
-                                    focusedLabelColor = LahoriWhite,
-                                    unfocusedLabelColor = LahoriWhite.copy(alpha = 0.65f)
-                                ),
-                                modifier = Modifier.weight(0.62f)
-                            )
+            // Bottom Primary CTA
+            Button(
+                onClick = {
+                    if (activeMode == OrderType.DELIVERY) {
+                        val cleanAddr = fullAddressInput.trim()
+                        if (cleanAddr.isBlank()) {
+                            validationError = "Please enter your complete delivery address before confirming."
+                            return@Button
                         }
-
-                        OutlinedTextField(
-                            value = streetInput,
-                            onValueChange = {
-                                streetInput = it
-                                validationError = null
-                            },
-                            label = { Text("House / Street / Landmark") },
-                            placeholder = { Text("e.g. Near Main KLP Chowk") },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = LahoriWhite,
-                                unfocusedTextColor = LahoriWhite,
-                                focusedBorderColor = LahoriRed,
-                                unfocusedBorderColor = Color.White.copy(alpha = 0.25f),
-                                focusedLabelColor = LahoriWhite,
-                                unfocusedLabelColor = LahoriWhite.copy(alpha = 0.65f)
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("address_street_input")
-                        )
-
-                        Text(
-                            text = "Auto-routed to: ${previewBranch.displayShortLabel()} (${previewBranch.name})",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = LahoriGold
-                        )
-
-                        if (validationError != null) {
-                            Text(
-                                text = validationError!!,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = LahoriRed
+                        if (cleanAddr != selectedAddressStreet || landmarkInput.trim() != selectedLandmark) {
+                            onSaveManualAddress(
+                                editingAddressId,
+                                labelInput.trim().ifBlank { "Home" },
+                                cleanAddr,
+                                landmarkInput.trim()
                             )
-                        }
-
-                        Button(
-                            onClick = {
-                                if (streetInput.trim().length < 3 || areaInput.trim().isBlank()) {
-                                    validationError = "Please enter at least 3 characters for street and area."
-                                } else {
-                                    onAddNewAddress(labelInput.trim(), streetInput.trim(), areaInput.trim())
-                                    showAddForm = false
-                                    streetInput = ""
-                                }
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = LahoriRed),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                                .testTag("save_new_address_btn")
-                        ) {
-                            Text("SAVE & ROUTE TO ${previewBranch.displayShortLabel().uppercase()}", style = MaterialTheme.typography.labelLarge)
                         }
                     }
-                }
-            }
-
-            // Bottom Action Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    onStartOrder()
+                },
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = LahoriRed,
+                    contentColor = LahoriWhite
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .testTag("start_your_order_button")
             ) {
-                if (activeMode == OrderType.DELIVERY) {
-                    OutlinedButton(
-                        onClick = { showAddForm = !showAddForm },
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.5.dp, LahoriWhite.copy(alpha = 0.6f)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = LahoriWhite),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp)
-                            .testTag("add_new_address_button")
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = if (showAddForm) "HIDE FORM" else "ADD ADDRESS",
-                            style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
-                            maxLines = 1
-                        )
-                    }
-                }
-
-                Button(
-                    onClick = onStartOrder,
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = LahoriRed,
-                        contentColor = LahoriWhite
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(50.dp)
-                        .testTag("start_your_order_button")
-                ) {
-                    Text(
-                        text = if (activeMode == OrderType.PICKUP) "CONFIRM BRANCH" else "START YOUR ORDER",
-                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
-                        maxLines = 1
-                    )
-                }
+                Text(
+                    text = if (activeMode == OrderType.PICKUP) "CONFIRM PICKUP BRANCH" else "CONFIRM ADDRESS & ORDER",
+                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp, fontWeight = FontWeight.Black),
+                    maxLines = 1
+                )
             }
         }
     }
