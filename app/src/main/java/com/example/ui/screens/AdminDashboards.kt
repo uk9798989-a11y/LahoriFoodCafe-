@@ -430,6 +430,7 @@ fun SuperAdminDashboardScreen(
                                         imageUrl = item.imageUrl,
                                         contentDescription = item.name,
                                         compact = true,
+                                        itemId = item.id,
                                         modifier = Modifier
                                             .size(62.dp)
                                             .clip(RoundedCornerShape(12.dp))
@@ -2637,7 +2638,7 @@ private fun MenuEditorDialog(
                                     text = when {
                                         pickedImageUri != null -> "READY TO UPLOAD"
                                         imageUrl.isNotBlank() -> "CUSTOM PHOTO"
-                                        else -> "ARTWORK THEME"
+                                        else -> "MENU PHOTO"
                                     },
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontSize = 9.sp,
@@ -2667,6 +2668,7 @@ private fun MenuEditorDialog(
                                 imageUrl = imageUrl,
                                 previewModel = pickedImageUri,
                                 contentDescription = name.ifBlank { "Menu item photo preview" },
+                                itemId = initialItem?.id.orEmpty(),
                                 modifier = Modifier.fillMaxSize()
                             )
                             if (!isSaving) {

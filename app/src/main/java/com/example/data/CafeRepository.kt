@@ -361,7 +361,8 @@ class CafeRepository(
         return try {
             requireUserId()
             val existingSnap = db.collection(path).get().await()
-            val existingIds = existingSnap.documents.map { it.id }.toSet()
+            val existingDocsById = existingSnap.documents.associateBy { it.id }
+            val existingIds = existingDocsById.keys
             val hasNewCatalog = existingIds.any { it.startsWith("lfc_") }
 
             val legacyToDelete = if (!hasNewCatalog) {
@@ -373,8 +374,17 @@ class CafeRepository(
                 val docId = item.id.removePrefix("seed_")
                 !existingIds.contains(docId)
             }
+            // Upgrade existing lfc_* seed docs that still have generic artwork keys (pre-PDF menu)
+            // so their updated PDF names, prices, descriptions, and real menu_* imageKeys sync cleanly
+            // while preserving any custom uploaded imageUrl or available toggle set by Super Admin.
+            val seedItemsToUpgrade = SeedMenuData.initialItems.filter { item ->
+                val docId = item.id.removePrefix("seed_")
+                val existingDoc = existingDocsById[docId] ?: return@filter false
+                val existingImageKey = existingDoc.getString("imageKey").orEmpty()
+                !existingImageKey.startsWith("menu_")
+            }
 
-            if (legacyToDelete.isEmpty() && missingSeedItems.isEmpty()) {
+            if (legacyToDelete.isEmpty() && missingSeedItems.isEmpty() && seedItemsToUpgrade.isEmpty()) {
                 return Result.success(Unit)
             }
 
@@ -403,6 +413,7 @@ class CafeRepository(
                     "category" to item.category.trim().take(40),
                     "pricePkr" to item.pricePkr,
                     "imageKey" to item.imageKey.trim().take(50),
+                    "imageUrl" to "",
                     "badgeText" to item.badgeText.trim().take(30),
                     "available" to item.available,
                     "sortOrder" to item.sortOrder.coerceIn(0L, 10000L),
@@ -410,6 +421,24 @@ class CafeRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 batch.set(docRef, payload)
+                opsInBatch++
+                flushIfNeeded()
+            }
+
+            for (item in seedItemsToUpgrade) {
+                val docId = item.id.removePrefix("seed_")
+                val docRef = db.collection(path).document(docId)
+                val updates = mapOf(
+                    "name" to item.name.trim().take(80),
+                    "description" to item.description.trim().take(300),
+                    "category" to item.category.trim().take(40),
+                    "pricePkr" to item.pricePkr,
+                    "imageKey" to item.imageKey.trim().take(50),
+                    "badgeText" to item.badgeText.trim().take(30),
+                    "sortOrder" to item.sortOrder.coerceIn(0L, 10000L),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                batch.update(docRef, updates)
                 opsInBatch++
                 flushIfNeeded()
             }

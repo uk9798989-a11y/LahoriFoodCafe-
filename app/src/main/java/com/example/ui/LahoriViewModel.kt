@@ -334,7 +334,23 @@ class LahoriViewModel(
                     val customItems = items.filter { it.id !in SeedMenuData.legacyStarterIds }
                     (SeedMenuData.initialItems + customItems).sortedBy { it.sortOrder }
                 }
-                else -> items
+                else -> {
+                    val seedByDocId = SeedMenuData.initialItems.associateBy { it.id.removePrefix("seed_") }
+                    val existingDocIds = items.map { it.id.removePrefix("seed_") }.toSet()
+                    val upgradedFirestoreItems = items.map { docItem ->
+                        val canonicalSeed = seedByDocId[docItem.id.removePrefix("seed_")]
+                        if (canonicalSeed != null && !docItem.imageKey.startsWith("menu_")) {
+                            docItem.copy(imageKey = canonicalSeed.imageKey)
+                        } else {
+                            docItem
+                        }
+                    }
+                    val newlyAddedCatalogItems = SeedMenuData.initialItems.filter { seedItem ->
+                        val docId = seedItem.id.removePrefix("seed_")
+                        docId !in existingDocIds
+                    }
+                    (upgradedFirestoreItems + newlyAddedCatalogItems).sortedBy { it.sortOrder }
+                }
             }
             UiState.Success(resolved)
         }
